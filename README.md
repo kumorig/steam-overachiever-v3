@@ -2,6 +2,11 @@
 
 A desktop application for tracking your Steam game library and achievement progress over time. 
 
+This project is in no way affiliated with or endorsed by Valve Corporation.
+
+
+## Setup
+
 For it to work, you need to provide your Steam API key in a `.env` file in the project root. You can get one from [here](https://steamcommunity.com/dev/apikey) after registering a developer account (free for now).
 
 See `.env.example` for and example of the required format.
@@ -20,3 +25,6 @@ About half of the code has been "vibe-coded", feel free to help clean-up where y
 
 ## License
 This project is licensed under the MIT License. See the `LICENSE` file for details.
+
+## Acknowledgements
+This project is in no way affiliated with or endorsed by Valve Corporation.
