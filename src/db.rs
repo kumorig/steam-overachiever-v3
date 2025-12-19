@@ -1,5 +1,5 @@
 use rusqlite::{Connection, Result};
-use crate::models::{Game, RunHistory, SteamGame, Achievement, AchievementHistory, GameAchievement, AchievementSchema};
+use crate::models::{Game, RunHistory, SteamGame, Achievement, AchievementHistory, GameAchievement, AchievementSchema, RecentAchievement, FirstPlay, LogEntry};
 use chrono::Utc;
 
 const DB_PATH: &str = "steam_overachiever.db";
@@ -74,12 +74,37 @@ fn init_tables(conn: &Connection) -> Result<()> {
         [],
     )?;
 
+    // Table for storing first play events
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS first_plays (
+            appid INTEGER PRIMARY KEY,
+            played_at INTEGER NOT NULL
+        )",
+        [],
+    )?;
+
     Ok(())
 }
 
 pub fn upsert_games(conn: &Connection, games: &[SteamGame]) -> Result<()> {
     let now = Utc::now().to_rfc3339();
     for game in games {
+        // Check if this is a first play (game existed with 0 playtime, now has playtime)
+        if game.playtime_forever > 0 {
+            let old_playtime: Option<u32> = conn.query_row(
+                "SELECT playtime_forever FROM games WHERE appid = ?1",
+                [game.appid],
+                |row| row.get(0),
+            ).ok();
+            
+            if old_playtime == Some(0) {
+                // First time playing! Record it using rtime_last_played as the timestamp
+                if let Some(played_at) = game.rtime_last_played {
+                    let _ = record_first_play(conn, game.appid, played_at as i64);
+                }
+            }
+        }
+        
         conn.execute(
             "INSERT INTO games (appid, name, playtime_forever, rtime_last_played, img_icon_url, added_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6)
@@ -349,4 +374,110 @@ pub fn get_game_achievements(conn: &Connection, appid: u64) -> Result<Vec<GameAc
     })?.collect::<Result<Vec<_>>>()?;
     
     Ok(achievements)
+}
+
+/// Get recently unlocked achievements (with game name)
+pub fn get_recent_achievements(conn: &Connection, limit: i32) -> Result<Vec<RecentAchievement>> {
+    let mut stmt = conn.prepare(
+        "SELECT a.appid, g.name, a.name, a.unlocktime, a.icon, g.img_icon_url
+         FROM achievements a
+         JOIN games g ON a.appid = g.appid
+         WHERE a.achieved = 1 AND a.unlocktime IS NOT NULL
+         ORDER BY a.unlocktime DESC
+         LIMIT ?1"
+    )?;
+    
+    let achievements = stmt.query_map([limit], |row| {
+        let unlocktime_unix: i64 = row.get(3)?;
+        let unlocktime = chrono::DateTime::from_timestamp(unlocktime_unix, 0)
+            .map(|dt| dt.with_timezone(&Utc))
+            .unwrap_or_else(|| Utc::now());
+        
+        Ok(RecentAchievement {
+            appid: row.get(0)?,
+            game_name: row.get(1)?,
+            achievement_name: row.get(2)?,
+            unlocktime,
+            achievement_icon: row.get(4)?,
+            game_icon_url: row.get(5)?,
+        })
+    })?.collect::<Result<Vec<_>>>()?;
+    
+    Ok(achievements)
+}
+
+/// Record a first play event for a game
+pub fn record_first_play(conn: &Connection, appid: u64, played_at: i64) -> Result<()> {
+    conn.execute(
+        "INSERT OR IGNORE INTO first_plays (appid, played_at) VALUES (?1, ?2)",
+        rusqlite::params![appid, played_at],
+    )?;
+    Ok(())
+}
+
+/// Get recent first play events
+pub fn get_recent_first_plays(conn: &Connection, limit: i32) -> Result<Vec<FirstPlay>> {
+    let mut stmt = conn.prepare(
+        "SELECT f.appid, g.name, f.played_at, g.img_icon_url
+         FROM first_plays f
+         JOIN games g ON f.appid = g.appid
+         ORDER BY f.played_at DESC
+         LIMIT ?1"
+    )?;
+    
+    let first_plays = stmt.query_map([limit], |row| {
+        let played_at_unix: i64 = row.get(2)?;
+        let played_at = chrono::DateTime::from_timestamp(played_at_unix, 0)
+            .map(|dt| dt.with_timezone(&Utc))
+            .unwrap_or_else(|| Utc::now());
+        
+        Ok(FirstPlay {
+            appid: row.get(0)?,
+            game_name: row.get(1)?,
+            played_at,
+            game_icon_url: row.get(3)?,
+        })
+    })?.collect::<Result<Vec<_>>>()?;
+    
+    Ok(first_plays)
+}
+
+/// Get combined log entries (achievements + first plays), sorted by timestamp descending
+pub fn get_log_entries(conn: &Connection, limit: i32) -> Result<Vec<LogEntry>> {
+    // Get achievements
+    let achievements = get_recent_achievements(conn, limit)?;
+    
+    // Get first plays
+    let first_plays = get_recent_first_plays(conn, limit)?;
+    
+    // Combine and sort by timestamp
+    let mut entries: Vec<LogEntry> = Vec::new();
+    
+    for ach in achievements {
+        entries.push(LogEntry::Achievement {
+            appid: ach.appid,
+            game_name: ach.game_name,
+            achievement_name: ach.achievement_name,
+            timestamp: ach.unlocktime,
+            achievement_icon: ach.achievement_icon,
+            game_icon_url: ach.game_icon_url,
+        });
+    }
+    
+    for fp in first_plays {
+        entries.push(LogEntry::FirstPlay {
+            appid: fp.appid,
+            game_name: fp.game_name,
+            timestamp: fp.played_at,
+            game_icon_url: fp.game_icon_url,
+        });
+    }
+    
+    // Sort by timestamp descending
+    entries.sort_by(|a, b| b.timestamp().cmp(&a.timestamp()));
+    
+    // Limit to requested number
+    entries.truncate(limit as usize);
+    
+    Ok(entries)
 }

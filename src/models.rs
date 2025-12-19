@@ -100,3 +100,51 @@ pub struct AchievementHistory {
     pub games_with_achievements: i32,
     pub avg_completion_percent: f32,
 }
+
+/// A recently unlocked achievement with game info
+#[derive(Debug, Clone)]
+pub struct RecentAchievement {
+    pub appid: u64,
+    pub game_name: String,
+    pub achievement_name: String,
+    pub unlocktime: chrono::DateTime<chrono::Utc>,
+    pub achievement_icon: String,
+    pub game_icon_url: Option<String>,
+}
+
+/// First play event for a game
+#[derive(Debug, Clone)]
+pub struct FirstPlay {
+    pub appid: u64,
+    pub game_name: String,
+    pub played_at: chrono::DateTime<chrono::Utc>,
+    pub game_icon_url: Option<String>,
+}
+
+/// A log entry that can be either an achievement or first play
+#[derive(Debug, Clone)]
+pub enum LogEntry {
+    Achievement {
+        appid: u64,
+        game_name: String,
+        achievement_name: String,
+        timestamp: chrono::DateTime<chrono::Utc>,
+        achievement_icon: String,
+        game_icon_url: Option<String>,
+    },
+    FirstPlay {
+        appid: u64,
+        game_name: String,
+        timestamp: chrono::DateTime<chrono::Utc>,
+        game_icon_url: Option<String>,
+    },
+}
+
+impl LogEntry {
+    pub fn timestamp(&self) -> chrono::DateTime<chrono::Utc> {
+        match self {
+            LogEntry::Achievement { timestamp, .. } => *timestamp,
+            LogEntry::FirstPlay { timestamp, .. } => *timestamp,
+        }
+    }
+}

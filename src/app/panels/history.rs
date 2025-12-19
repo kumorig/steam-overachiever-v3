@@ -5,6 +5,7 @@ use egui_phosphor::regular;
 use egui_plot::{Line, Plot, PlotPoints};
 
 use crate::app::SteamOverachieverApp;
+use crate::models::LogEntry;
 
 impl SteamOverachieverApp {
     pub(crate) fn render_history_panel(&mut self, ctx: &egui::Context) {
@@ -16,7 +17,7 @@ impl SteamOverachieverApp {
                     ui.add_space(16.0);
                     self.render_achievement_progress(ui);
                     ui.add_space(16.0);
-                    self.render_run_history(ui);
+                    self.render_log(ui);
                 });
             });
     }
@@ -74,6 +75,28 @@ impl SteamOverachieverApp {
             })
             .collect();
         
+        // Calculate Y-axis bounds based on actual data
+        let all_values: Vec<f64> = self.achievement_history
+            .iter()
+            .flat_map(|h| {
+                let overall_pct = if h.total_achievements > 0 {
+                    h.unlocked_achievements as f64 / h.total_achievements as f64 * 100.0
+                } else {
+                    0.0
+                };
+                vec![h.avg_completion_percent as f64, overall_pct]
+            })
+            .collect();
+        
+        let min_y = all_values.iter().cloned().fold(f64::INFINITY, f64::min).max(0.0);
+        let max_y = all_values.iter().cloned().fold(f64::NEG_INFINITY, f64::max).min(100.0);
+        
+        // Add some padding (5% of range, minimum 1.0)
+        let range = max_y - min_y;
+        let padding = (range * 0.05).max(1.0);
+        let y_min = (min_y - padding).max(0.0);
+        let y_max = (max_y + padding).min(100.0);
+        
         let avg_line = Line::new("Avg Game Completion %", avg_completion_points)
             .color(egui::Color32::from_rgb(100, 200, 100));
         let overall_line = Line::new("Overall Achievement %", overall_pct_points)
@@ -82,8 +105,8 @@ impl SteamOverachieverApp {
         Plot::new("achievements_history")
             .view_aspect(2.0)
             .legend(egui_plot::Legend::default())
-            .include_y(0.0)
-            .include_y(100.0)
+            .include_y(y_min)
+            .include_y(y_max)
             .show(ui, |plot_ui| {
                 plot_ui.line(avg_line);
                 plot_ui.line(overall_line);
@@ -140,7 +163,7 @@ impl SteamOverachieverApp {
             };
             
             ui.horizontal(|ui| {
-                ui.label("Average completion:");
+                ui.label("Avg. game completion:");
                 ui.label(egui::RichText::new(format!("{:.1}%", current_avg)).color(yellow).strong());
                 ui.checkbox(&mut self.include_unplayed_in_avg, "Include unplayed");
             });
@@ -162,16 +185,113 @@ impl SteamOverachieverApp {
         }
     }
     
-    fn render_run_history(&self, ui: &mut egui::Ui) {
-        ui.collapsing(format!("{} Run History", regular::CLOCK_COUNTER_CLOCKWISE), |ui| {
-            if self.run_history.is_empty() {
-                ui.label("No runs recorded yet.");
+    fn render_log(&mut self, ui: &mut egui::Ui) {
+        // Colors for different elements
+        let date_color = egui::Color32::from_rgb(130, 130, 130);  // Gray for dates
+        let game_color = egui::Color32::from_rgb(100, 180, 255);  // Blue for game names
+        let achievement_color = egui::Color32::from_rgb(255, 215, 0);  // Gold for achievement names
+        let alt_bg = egui::Color32::from_rgba_unmultiplied(255, 255, 255, 8);  // Subtle alternating bg
+        
+        ui.collapsing(format!("{} Log", regular::SCROLL), |ui| {
+            if self.log_entries.is_empty() {
+                ui.label("No activity yet.");
             } else {
-                for entry in self.run_history.iter().rev() {
-                    ui.horizontal(|ui| {
-                        ui.label(entry.run_at.format("%Y-%m-%d %H:%M").to_string());
-                        ui.label(format!("{} games", entry.total_games));
-                    });
+                for (i, entry) in self.log_entries.iter().enumerate() {
+                    // Alternating background
+                    let row_rect = ui.available_rect_before_wrap();
+                    let row_rect = egui::Rect::from_min_size(
+                        row_rect.min,
+                        egui::vec2(row_rect.width(), 24.0)
+                    );
+                    if i % 2 == 1 {
+                        ui.painter().rect_filled(row_rect, 2.0, alt_bg);
+                    }
+                    
+                    match entry {
+                        LogEntry::Achievement { appid, game_name, achievement_name, timestamp, achievement_icon, game_icon_url } => {
+                            ui.horizontal(|ui| {
+                                ui.spacing_mut().item_spacing.x = 4.0;
+                                
+                                // Achievement icon
+                                if !achievement_icon.is_empty() {
+                                    let img_source: egui::ImageSource<'_> = if let Some(bytes) = self.icon_cache.get_icon_bytes(achievement_icon) {
+                                        let cache_uri = format!("bytes://log_ach/{}", achievement_icon.replace(['/', ':', '.'], "_"));
+                                        ui.ctx().include_bytes(cache_uri.clone(), bytes);
+                                        egui::ImageSource::Uri(cache_uri.into())
+                                    } else {
+                                        egui::ImageSource::Uri(achievement_icon.clone().into())
+                                    };
+                                    ui.add(
+                                        egui::Image::new(img_source)
+                                            .fit_to_exact_size(egui::vec2(18.0, 18.0))
+                                            .corner_radius(2.0)
+                                    );
+                                }
+                                
+                                // Game icon
+                                if let Some(icon_hash) = game_icon_url {
+                                    if !icon_hash.is_empty() {
+                                        let game_icon_url = format!(
+                                            "https://media.steampowered.com/steamcommunity/public/images/apps/{}/{}.jpg",
+                                            appid, icon_hash
+                                        );
+                                        let img_source: egui::ImageSource<'_> = if let Some(bytes) = self.icon_cache.get_icon_bytes(&game_icon_url) {
+                                            let cache_uri = format!("bytes://log_game/{}", appid);
+                                            ui.ctx().include_bytes(cache_uri.clone(), bytes);
+                                            egui::ImageSource::Uri(cache_uri.into())
+                                        } else {
+                                            egui::ImageSource::Uri(game_icon_url.into())
+                                        };
+                                        ui.add(
+                                            egui::Image::new(img_source)
+                                                .fit_to_exact_size(egui::vec2(18.0, 18.0))
+                                                .corner_radius(2.0)
+                                        );
+                                    }
+                                }
+                                
+                                ui.label(egui::RichText::new(timestamp.format("%Y-%m-%d").to_string()).color(date_color).small());
+                                ui.label(egui::RichText::new(achievement_name).color(achievement_color).strong());
+                                ui.label(egui::RichText::new("in").small());
+                                ui.label(egui::RichText::new(format!("{}!", game_name)).color(game_color));
+                            });
+                        }
+                        LogEntry::FirstPlay { appid, game_name, timestamp, game_icon_url } => {
+                            ui.horizontal(|ui| {
+                                ui.spacing_mut().item_spacing.x = 4.0;
+                                
+                                // Game icon
+                                if let Some(icon_hash) = game_icon_url {
+                                    if !icon_hash.is_empty() {
+                                        let game_icon_url = format!(
+                                            "https://media.steampowered.com/steamcommunity/public/images/apps/{}/{}.jpg",
+                                            appid, icon_hash
+                                        );
+                                        let img_source: egui::ImageSource<'_> = if let Some(bytes) = self.icon_cache.get_icon_bytes(&game_icon_url) {
+                                            let cache_uri = format!("bytes://log_game/{}", appid);
+                                            ui.ctx().include_bytes(cache_uri.clone(), bytes);
+                                            egui::ImageSource::Uri(cache_uri.into())
+                                        } else {
+                                            egui::ImageSource::Uri(game_icon_url.into())
+                                        };
+                                        ui.add(
+                                            egui::Image::new(img_source)
+                                                .fit_to_exact_size(egui::vec2(18.0, 18.0))
+                                                .corner_radius(2.0)
+                                        );
+                                    } else {
+                                        ui.add_space(22.0);
+                                    }
+                                } else {
+                                    ui.add_space(22.0);
+                                }
+                                
+                                ui.label(egui::RichText::new(timestamp.format("%Y-%m-%d").to_string()).color(date_color).small());
+                                ui.label(egui::RichText::new(game_name).color(game_color));
+                                ui.label(egui::RichText::new("played for the first time!").small());
+                            });
+                        }
+                    }
                 }
             }
         });

@@ -3,9 +3,9 @@
 mod state;
 mod panels;
 
-use crate::db::{get_all_games, get_run_history, get_achievement_history, open_connection, get_last_update};
+use crate::db::{get_all_games, get_run_history, get_achievement_history, get_log_entries, open_connection, get_last_update};
 use crate::icon_cache::IconCache;
-use crate::models::{Game, RunHistory, AchievementHistory, GameAchievement};
+use crate::models::{Game, RunHistory, AchievementHistory, GameAchievement, LogEntry};
 use crate::ui::{AppState, SortColumn, SortOrder, TriFilter, ProgressReceiver};
 
 use eframe::egui;
@@ -16,6 +16,7 @@ pub struct SteamOverachieverApp {
     pub(crate) games: Vec<Game>,
     pub(crate) run_history: Vec<RunHistory>,
     pub(crate) achievement_history: Vec<AchievementHistory>,
+    pub(crate) log_entries: Vec<LogEntry>,
     pub(crate) status: String,
     pub(crate) state: AppState,
     pub(crate) receiver: Option<ProgressReceiver>,
@@ -47,12 +48,14 @@ impl SteamOverachieverApp {
         let games = get_all_games(&conn).unwrap_or_default();
         let run_history = get_run_history(&conn).unwrap_or_default();
         let achievement_history = get_achievement_history(&conn).unwrap_or_default();
+        let log_entries = get_log_entries(&conn, 30).unwrap_or_default();
         let last_update_time = get_last_update(&conn).unwrap_or(None);
         
         let mut app = Self {
             games,
             run_history,
             achievement_history,
+            log_entries,
             status: "Ready".to_string(),
             state: AppState::Idle,
             receiver: None,

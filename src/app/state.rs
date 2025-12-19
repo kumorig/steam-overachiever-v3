@@ -1,6 +1,6 @@
 //! App state management - sorting, progress handling, and background operations
 
-use crate::db::{get_run_history, get_achievement_history, insert_achievement_history, open_connection, get_last_update};
+use crate::db::{get_run_history, get_achievement_history, get_log_entries, insert_achievement_history, open_connection, get_last_update};
 use crate::steam_api::{FetchProgress, ScrapeProgress, UpdateProgress};
 use crate::ui::{AppState, SortColumn, SortOrder, ProgressReceiver, FLASH_DURATION};
 
@@ -358,6 +358,7 @@ impl SteamOverachieverApp {
                 avg_completion,
             );
             self.achievement_history = get_achievement_history(&conn).unwrap_or_default();
+            self.log_entries = get_log_entries(&conn, 30).unwrap_or_default();
         }
     }
 }
