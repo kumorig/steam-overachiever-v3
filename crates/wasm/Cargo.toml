@@ -1,0 +1,54 @@
+[package]
+name = "overachiever-wasm"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+overachiever-core = { path = "../core" }
+
+# eframe for WASM (use glow backend for better web compatibility)
+eframe = { version = "0.33.3", default-features = false, features = ["glow"] }
+egui = "0.33.3"
+egui_extras = { version = "0.33.3", features = ["all_loaders", "http", "image"] }
+egui_plot = "0.34.0"
+egui-phosphor = "0.11.0"
+
+# Image format support for egui
+image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
+
+# WASM bindings
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+web-sys = { version = "0.3", features = [
+    "Window",
+    "Document",
+    "Element",
+    "HtmlCanvasElement",
+    "Storage",
+    "WebSocket",
+    "MessageEvent",
+    "ErrorEvent",
+    "CloseEvent",
+    "BinaryType",
+    "console",
+    "Location",
+] }
+js-sys = "0.3"
+gloo-net = "0.6"
+gloo-storage = "0.3"
+gloo-timers = "0.3"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+chrono = { version = "0.4", features = ["serde", "wasmbind"] }
+
+# Error handling
+console_error_panic_hook = "0.1"
+tracing-wasm = "0.2"
+
+# Required for WASM random
+getrandom = { version = "0.2", features = ["js"] }
