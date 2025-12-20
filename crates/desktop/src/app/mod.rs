@@ -44,6 +44,8 @@ pub struct SteamOverachieverApp {
     pub(crate) filter_playtime: TriFilter,
     // Settings window
     pub(crate) show_settings: bool,
+    // GDPR dialog window
+    pub(crate) show_gdpr_dialog: bool,
     // Sidebar panel state
     pub(crate) show_stats_panel: bool,
     pub(crate) sidebar_panel: SidebarPanel,
@@ -90,6 +92,7 @@ impl SteamOverachieverApp {
             filter_achievements: TriFilter::All,
             filter_playtime: TriFilter::All,
             show_settings,
+            show_gdpr_dialog: false,
             show_stats_panel: true,
             sidebar_panel: SidebarPanel::Stats,
         };
@@ -121,5 +124,8 @@ impl eframe::App for SteamOverachieverApp {
         self.render_top_panel(ctx);
         self.render_history_panel(ctx);
         self.render_games_table_panel(ctx);
+        
+        // Show GDPR modal if needed (for hybrid/remote mode and consent not set)
+        self.render_gdpr_modal(ctx);
     }
 }

@@ -1,6 +1,6 @@
 //! Configuration management using config.toml
 
-use overachiever_core::DataMode;
+use overachiever_core::{DataMode, GdprConsent};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
@@ -24,6 +24,10 @@ pub struct Config {
     /// Server URL for hybrid/remote modes
     #[serde(default)]
     pub server_url: String,
+    
+    /// GDPR consent status (for hybrid/remote modes)
+    #[serde(default)]
+    pub gdpr_consent: GdprConsent,
 }
 
 impl Default for Config {
@@ -33,6 +37,7 @@ impl Default for Config {
             steam_web_api_key: String::new(),
             steam_id: String::new(),
             server_url: String::new(),
+            gdpr_consent: GdprConsent::Unset,
         }
     }
 }

@@ -2,7 +2,7 @@
 
 use eframe::egui;
 use egui_phosphor::regular;
-use overachiever_core::{Game, GameAchievement, UserProfile, RunHistory, AchievementHistory, SyncState, LogEntry};
+use overachiever_core::{Game, GameAchievement, UserProfile, RunHistory, AchievementHistory, SyncState, LogEntry, GdprConsent};
 use overachiever_core::{StatsPanelPlatform, StatsPanelConfig, render_stats_content, render_log_content, SidebarPanel};
 use overachiever_core::{GamesTablePlatform, SortColumn, SortOrder, TriFilter, sort_games, get_filtered_indices, render_filter_bar, render_games_table};
 use std::collections::{HashMap, HashSet};
@@ -72,6 +72,9 @@ pub struct WasmApp {
     
     // Token from URL or storage
     auth_token: Option<String>,
+    
+    // GDPR consent status
+    gdpr_consent: GdprConsent,
 }
 
 // ============================================================================
@@ -111,6 +114,23 @@ impl StatsPanelPlatform for WasmApp {
     fn achievement_icon_source(&self, _ui: &egui::Ui, icon_url: &str) -> egui::ImageSource<'static> {
         let proxied = proxy_steam_image_url(icon_url);
         egui::ImageSource::Uri(proxied.into())
+    }
+    
+    fn submit_achievement_rating(&mut self, appid: u64, apiname: String, rating: u8) {
+        // Submit via REST API (async, fire-and-forget)
+        if let Some(token) = &self.auth_token {
+            let token = token.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                match crate::http_client::submit_achievement_rating(&token, appid, &apiname, rating).await {
+                    Ok(resp) => {
+                        web_sys::console::log_1(&format!("Rating submitted: {} stars for {}/{}", rating, resp.appid, resp.apiname).into());
+                    }
+                    Err(e) => {
+                        web_sys::console::error_1(&format!("Failed to submit rating: {}", e).into());
+                    }
+                }
+            });
+        }
     }
 }
 
@@ -195,6 +215,9 @@ impl WasmApp {
             .unwrap_or(1200.0);
         let show_stats_panel = viewport_width > 800.0;
         
+        // Load GDPR consent from localStorage
+        let gdpr_consent = get_gdpr_consent_from_storage();
+        
         let mut app = Self {
             server_url,
             ws_client: None,
@@ -220,6 +243,7 @@ impl WasmApp {
             show_stats_panel,
             sidebar_panel: SidebarPanel::Stats,
             auth_token,
+            gdpr_consent,
         };
         
         // Auto-connect on startup
@@ -419,6 +443,9 @@ impl eframe::App for WasmApp {
         self.render_top_panel(ctx);
         self.render_stats_panel(ctx);
         self.render_games_panel(ctx);
+        
+        // Show GDPR modal if consent not set (always on top)
+        self.render_gdpr_modal(ctx);
     }
 }
 
@@ -501,6 +528,18 @@ impl WasmApp {
                             self.connection_state = ConnectionState::Disconnected;
                             self.games.clear();
                             self.games_loaded = false;
+                        }
+                        
+                        // GDPR button - only show if consent has been set
+                        if self.gdpr_consent.is_set() {
+                            if ui.button(format!("{} Privacy", regular::SHIELD_CHECK))
+                                .on_hover_text("Privacy Settings")
+                                .clicked() 
+                            {
+                                // Reset consent to show modal again
+                                self.gdpr_consent = GdprConsent::Unset;
+                                clear_gdpr_consent_from_storage();
+                            }
                         }
                     }
                 });
@@ -777,6 +816,105 @@ impl WasmApp {
         }
     }
     
+    // ========================================================================
+    // GDPR Modal
+    // ========================================================================
+    
+    fn render_gdpr_modal(&mut self, ctx: &egui::Context) {
+        // Only show if consent not set
+        if self.gdpr_consent.is_set() {
+            return;
+        }
+        
+        // Semi-transparent backdrop
+        let screen_rect = ctx.input(|i| i.viewport().inner_rect.unwrap_or(egui::Rect::NOTHING));
+        egui::Area::new(egui::Id::new("gdpr_backdrop"))
+            .fixed_pos(screen_rect.min)
+            .show(ctx, |ui| {
+                let painter = ui.painter();
+                painter.rect_filled(
+                    screen_rect,
+                    0.0,
+                    egui::Color32::from_black_alpha(180),
+                );
+            });
+        
+        // Modal window
+        egui::Window::new(format!("{} Privacy & Data Usage", regular::SHIELD_CHECK))
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .fixed_size([450.0, 0.0])
+            .show(ctx, |ui| {
+                ui.vertical(|ui| {
+                    ui.add_space(8.0);
+                    
+                    ui.label("This application processes personal data to provide its services:");
+                    
+                    ui.add_space(12.0);
+                    
+                    // Data we collect section
+                    ui.heading("Data We Process");
+                    ui.add_space(4.0);
+                    
+                    egui::Frame::new()
+                        .fill(ui.style().visuals.extreme_bg_color)
+                        .corner_radius(4.0)
+                        .inner_margin(8.0)
+                        .show(ui, |ui| {
+                            ui.label("• Your Steam ID (public identifier)");
+                            ui.label("• Your Steam display name");
+                            ui.label("• Your game library (via Steam API)");
+                            ui.label("• Achievement data for your games");
+                            ui.label("• Session authentication tokens");
+                        });
+                    
+                    ui.add_space(12.0);
+                    
+                    // Purpose section
+                    ui.heading("Purpose");
+                    ui.add_space(4.0);
+                    ui.label("This data is used to display your game library and track achievement progress. Your data is stored on our server and associated with your Steam ID.");
+                    
+                    ui.add_space(12.0);
+                    
+                    // Third party section
+                    ui.heading("Third Parties");
+                    ui.add_space(4.0);
+                    ui.label("We use the Steam Web API to fetch your public game and achievement data. No data is shared with other third parties.");
+                    
+                    ui.add_space(16.0);
+                    ui.separator();
+                    ui.add_space(8.0);
+                    
+                    // Buttons
+                    ui.horizontal(|ui| {
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.button(format!("{} Accept", regular::CHECK))
+                                .on_hover_text("Accept data processing and continue")
+                                .clicked() 
+                            {
+                                self.gdpr_consent = GdprConsent::Accepted;
+                                save_gdpr_consent_to_storage(GdprConsent::Accepted);
+                            }
+                            
+                            if ui.button(format!("{} Decline", regular::X))
+                                .on_hover_text("Decline - you won't be able to use the application")
+                                .clicked() 
+                            {
+                                self.gdpr_consent = GdprConsent::Declined;
+                                save_gdpr_consent_to_storage(GdprConsent::Declined);
+                                // Clear any existing auth data
+                                self.auth_token = None;
+                                clear_token_from_storage();
+                            }
+                        });
+                    });
+                    
+                    ui.add_space(4.0);
+                });
+            });
+    }
 }
 
 // ============================================================================
@@ -820,6 +958,47 @@ fn clear_token_from_storage() {
         .flatten()
     {
         let _ = storage.remove_item("overachiever_token");
+    }
+}
+
+// ============================================================================
+// GDPR Consent Storage
+// ============================================================================
+
+fn get_gdpr_consent_from_storage() -> GdprConsent {
+    web_sys::window()
+        .and_then(|w| w.local_storage().ok())
+        .flatten()
+        .and_then(|storage| storage.get_item("overachiever_gdpr_consent").ok())
+        .flatten()
+        .map(|s| match s.as_str() {
+            "accepted" => GdprConsent::Accepted,
+            "declined" => GdprConsent::Declined,
+            _ => GdprConsent::Unset,
+        })
+        .unwrap_or(GdprConsent::Unset)
+}
+
+fn save_gdpr_consent_to_storage(consent: GdprConsent) {
+    if let Some(storage) = web_sys::window()
+        .and_then(|w| w.local_storage().ok())
+        .flatten()
+    {
+        let value = match consent {
+            GdprConsent::Accepted => "accepted",
+            GdprConsent::Declined => "declined",
+            GdprConsent::Unset => "unset",
+        };
+        let _ = storage.set_item("overachiever_gdpr_consent", value);
+    }
+}
+
+fn clear_gdpr_consent_from_storage() {
+    if let Some(storage) = web_sys::window()
+        .and_then(|w| w.local_storage().ok())
+        .flatten()
+    {
+        let _ = storage.remove_item("overachiever_gdpr_consent");
     }
 }
 

@@ -1,0 +1,112 @@
+//! HTTP client for REST API calls (ratings, comments)
+//!
+//! Uses gloo-net for browser fetch API
+
+use gloo_net::http::Request;
+use serde::{Deserialize, Serialize};
+
+/// Submit an achievement rating via REST API
+pub async fn submit_achievement_rating(
+    token: &str,
+    appid: u64,
+    apiname: &str,
+    rating: u8,
+) -> Result<AchievementRatingResponse, String> {
+    let origin = web_sys::window()
+        .and_then(|w| w.location().origin().ok())
+        .unwrap_or_default();
+    
+    let url = format!("{}/api/achievement/rating", origin);
+    
+    let body = AchievementRatingRequest {
+        appid,
+        apiname: apiname.to_string(),
+        rating,
+    };
+    
+    let response = Request::post(&url)
+        .header("Authorization", &format!("Bearer {}", token))
+        .header("Content-Type", "application/json")
+        .json(&body)
+        .map_err(|e| format!("Failed to serialize request: {}", e))?
+        .send()
+        .await
+        .map_err(|e| format!("Failed to send request: {}", e))?;
+    
+    if !response.ok() {
+        let status = response.status();
+        let text = response.text().await.unwrap_or_default();
+        return Err(format!("Request failed with status {}: {}", status, text));
+    }
+    
+    response
+        .json::<AchievementRatingResponse>()
+        .await
+        .map_err(|e| format!("Failed to parse response: {}", e))
+}
+
+/// Submit an achievement comment via REST API
+pub async fn submit_achievement_comment(
+    token: &str,
+    achievements: Vec<(u64, String)>,
+    comment: &str,
+) -> Result<AchievementCommentResponse, String> {
+    let origin = web_sys::window()
+        .and_then(|w| w.location().origin().ok())
+        .unwrap_or_default();
+    
+    let url = format!("{}/api/achievement/comment", origin);
+    
+    let body = AchievementCommentRequest {
+        achievements,
+        comment: comment.to_string(),
+    };
+    
+    let response = Request::post(&url)
+        .header("Authorization", &format!("Bearer {}", token))
+        .header("Content-Type", "application/json")
+        .json(&body)
+        .map_err(|e| format!("Failed to serialize request: {}", e))?
+        .send()
+        .await
+        .map_err(|e| format!("Failed to send request: {}", e))?;
+    
+    if !response.ok() {
+        let status = response.status();
+        let text = response.text().await.unwrap_or_default();
+        return Err(format!("Request failed with status {}: {}", status, text));
+    }
+    
+    response
+        .json::<AchievementCommentResponse>()
+        .await
+        .map_err(|e| format!("Failed to parse response: {}", e))
+}
+
+// Request/Response types (matching backend)
+
+#[derive(Serialize)]
+struct AchievementRatingRequest {
+    appid: u64,
+    apiname: String,
+    rating: u8,
+}
+
+#[derive(Deserialize)]
+pub struct AchievementRatingResponse {
+    pub success: bool,
+    pub appid: u64,
+    pub apiname: String,
+}
+
+#[derive(Serialize)]
+struct AchievementCommentRequest {
+    achievements: Vec<(u64, String)>,
+    comment: String,
+}
+
+#[derive(Deserialize)]
+pub struct AchievementCommentResponse {
+    pub success: bool,
+    pub count: usize,
+}

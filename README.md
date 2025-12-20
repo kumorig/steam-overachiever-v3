@@ -29,6 +29,19 @@ or
 cargo build --release
 ```
 
+## Philosophy: REST/WebSocket Hybrid
+
+This project uses a hybrid approach for client-server communication:
+
+**WebSocket** is used for:
+- Real-time data synchronization (game lists, achievement updates)
+- Server-initiated pushes (scan progress, live updates)
+
+**REST** is used for:
+- User-initiated actions (submitting ratings, comments)
+- One-off requests that don't need persistent connections
+
+
 ## Contributing
 Contributions are welcome. Make a PR or open an issue. 
 About half of the code has been "vibe-coded", feel free to help clean-up any mess. AI contributions are welcome, but at least do some low effort testing before submitting a PR. Thanks!

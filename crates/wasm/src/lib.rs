@@ -7,6 +7,7 @@
 
 mod app;
 mod ws_client;
+mod http_client;
 
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;

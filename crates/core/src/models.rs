@@ -1,7 +1,7 @@
 //! Shared data models used across all platforms
 
-use serde::{Deserialize, Serialize};
 use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
 
 /// Data mode for the application
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -20,11 +20,11 @@ impl DataMode {
     pub fn requires_api_key(&self) -> bool {
         matches!(self, DataMode::Local | DataMode::Hybrid)
     }
-    
+
     pub fn requires_server(&self) -> bool {
         matches!(self, DataMode::Hybrid | DataMode::Remote)
     }
-    
+
     pub fn label(&self) -> &'static str {
         match self {
             DataMode::Local => "Local Only",
@@ -32,12 +32,12 @@ impl DataMode {
             DataMode::Remote => "Cloud (Full Remote)",
         }
     }
-    
+
     pub fn description(&self) -> &'static str {
         match self {
-            DataMode::Local => "All data stored on this device. Requires Steam API key.",
-            DataMode::Hybrid => "Personal data local, share ratings/tips. Requires Steam API key.",
-            DataMode::Remote => "All data synced to server. Login with Steam, no API key needed.",
+            DataMode::Local => "Essentially air-gapped: No remote communication or storage except Steam API. Requires Steam API key.",
+            DataMode::Hybrid => "Personal data local, Accesses community ratings/tips. Shares steam_id if you post comments/ratings. Requires Steam API key.",
+            DataMode::Remote => "All data synced to server. Login with Steam, no API key needed. Your game list is stored remotely, assossiated with your steam_id.",
         }
     }
 }
@@ -78,10 +78,12 @@ impl Game {
             _ => "—".to_string(),
         }
     }
-    
+
     pub fn completion_percent(&self) -> Option<f32> {
         match (self.achievements_unlocked, self.achievements_total) {
-            (Some(unlocked), Some(total)) if total > 0 => Some(unlocked as f32 / total as f32 * 100.0),
+            (Some(unlocked), Some(total)) if total > 0 => {
+                Some(unlocked as f32 / total as f32 * 100.0)
+            }
             _ => None,
         }
     }
@@ -200,7 +202,7 @@ pub struct GameRating {
     pub id: Option<i64>,
     pub steam_id: String,
     pub appid: u64,
-    pub rating: u8,           // 1-5 stars
+    pub rating: u8, // 1-5 stars
     pub comment: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -213,7 +215,7 @@ pub struct AchievementTip {
     pub steam_id: String,
     pub appid: u64,
     pub apiname: String,
-    pub difficulty: u8,       // 1-5
+    pub difficulty: u8, // 1-5
     pub tip: String,
     pub created_at: DateTime<Utc>,
 }
@@ -225,7 +227,7 @@ pub struct AchievementRating {
     pub steam_id: String,
     pub appid: u64,
     pub apiname: String,
-    pub rating: u8,           // 1-5 stars
+    pub rating: u8, // 1-5 stars
     pub created_at: DateTime<Utc>,
 }
 
@@ -263,4 +265,29 @@ pub struct SyncResult {
     pub games_updated: i32,
     pub achievements_updated: i32,
     pub new_games: i32,
+}
+
+/// GDPR consent status
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum GdprConsent {
+    /// User has not yet responded to GDPR dialog
+    #[default]
+    Unset,
+    /// User accepted data processing
+    Accepted,
+    /// User declined data processing
+    Declined,
+}
+
+impl GdprConsent {
+    /// Returns true if user has made a choice (accepted or declined)
+    pub fn is_set(&self) -> bool {
+        !matches!(self, GdprConsent::Unset)
+    }
+    
+    /// Returns true if user has accepted
+    pub fn is_accepted(&self) -> bool {
+        matches!(self, GdprConsent::Accepted)
+    }
 }
