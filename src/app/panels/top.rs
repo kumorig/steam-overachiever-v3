@@ -1,4 +1,4 @@
-//! Top toolbar panel - Update/Full Scan buttons and status
+//! Top toolbar panel - Sync/Full Scan buttons and status
 
 use eframe::egui;
 use egui_phosphor::regular;
@@ -14,24 +14,24 @@ impl SteamOverachieverApp {
                 ui.heading("Overachiever v3");
                 ui.separator();
                 
-                // Update button - for recently played games
-                let update_button = egui::Button::new(format!("{} Update", regular::ARROWS_CLOCKWISE));
-                let update_response = ui.add_enabled(!is_busy && self.config.is_valid(), update_button);
+                // Sync button - for recently played games
+                let sync_button = egui::Button::new(format!("{} Sync", regular::ARROWS_CLOCKWISE));
+                let sync_response = ui.add_enabled(!is_busy && self.config.is_valid(), sync_button);
                 
                 // Show warning if update is stale
                 if self.is_update_stale() && !is_busy {
-                    update_response.clone().on_hover_text(
-                        "⚠️ Last update was more than 2 weeks ago.\nThe recently played API only shows games from the last 2 weeks.\nConsider running a Full Scan instead."
+                    sync_response.clone().on_hover_text(
+                        "⚠️ Last sync was more than 2 weeks ago.\nThe recently played API only shows games from the last 2 weeks.\nConsider running a Full Scan instead."
                     );
                 }
                 
                 if !self.config.is_valid() {
-                    update_response.clone().on_hover_text(
+                    sync_response.clone().on_hover_text(
                         "Please configure Steam API Key and Steam ID in Settings (⚙)"
                     );
                 }
                 
-                if update_response.clicked() {
+                if sync_response.clicked() {
                     self.start_update();
                 }
                 
@@ -94,7 +94,7 @@ impl SteamOverachieverApp {
                         if ui.add(
                             egui::TextEdit::singleline(&mut self.config.steam_id)
                                 .desired_width(180.0)
-                                .hint_text("76561197960287930")
+                                .hint_text("12345678901234567")
                         ).changed() {
                             let _ = self.config.save();
                         }

@@ -145,28 +145,261 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                         tracing::info!("Starting Steam sync for user {}", steam_id);
                         let steam_id_u64: u64 = steam_id.parse().unwrap_or(0);
                         
-                        match crate::steam_api::fetch_owned_games(api_key, steam_id_u64).await {
-                            Ok(games) => {
-                                tracing::info!("Fetched {} games from Steam for user {}", games.len(), steam_id);
-                                match crate::db::upsert_games(&state.db_pool, steam_id, &games).await {
-                                    Ok(count) => {
-                                        tracing::info!("Saved {} games for user {}", count, steam_id);
-                                        // Return the updated games list
-                                        match crate::db::get_user_games(&state.db_pool, steam_id).await {
-                                            Ok(user_games) => ServerMessage::Games { games: user_games },
-                                            Err(e) => ServerMessage::Error { message: format!("Failed to fetch games after sync: {:?}", e) }
-                                        }
-                                    }
-                                    Err(e) => ServerMessage::Error { message: format!("Failed to save games: {:?}", e) }
-                                }
-                            }
+                        // Step 1: Fetch all owned games
+                        let games = match crate::steam_api::fetch_owned_games(api_key, steam_id_u64).await {
+                            Ok(g) => g,
                             Err(e) => {
                                 tracing::error!("Steam API error for user {}: {:?}", steam_id, e);
-                                ServerMessage::Error { message: format!("Steam API error: {}", e) }
+                                let _ = sender.send(Message::Text(serde_json::to_string(&ServerMessage::Error { 
+                                    message: format!("Steam API error: {}", e) 
+                                }).unwrap().into())).await;
+                                continue;
+                            }
+                        };
+                        
+                        tracing::info!("Fetched {} games from Steam for user {}", games.len(), steam_id);
+                        let game_count = games.len() as i32;
+                        
+                        match crate::db::upsert_games(&state.db_pool, steam_id, &games).await {
+                            Ok(count) => tracing::info!("Saved {} games for user {}", count, steam_id),
+                            Err(e) => {
+                                let _ = sender.send(Message::Text(serde_json::to_string(&ServerMessage::Error { 
+                                    message: format!("Failed to save games: {:?}", e) 
+                                }).unwrap().into())).await;
+                                continue;
+                            }
+                        }
+                        
+                        // Record run history
+                        let _ = crate::db::insert_run_history(&state.db_pool, steam_id, game_count).await;
+                        
+                        // Step 2: Fetch recently played games
+                        let recent_appids = crate::steam_api::fetch_recently_played(api_key, steam_id_u64)
+                            .await
+                            .unwrap_or_default();
+                        
+                        tracing::info!("Found {} recently played games for user {}", recent_appids.len(), steam_id);
+                        
+                        if recent_appids.is_empty() {
+                            // No recently played games, just return the games list
+                            match crate::db::get_user_games(&state.db_pool, steam_id).await {
+                                Ok(user_games) => ServerMessage::Games { games: user_games },
+                                Err(e) => ServerMessage::Error { message: format!("Failed to fetch games: {:?}", e) }
+                            }
+                        } else {
+                            // Step 3: Scrape achievements for recently played games
+                            let all_games = match crate::db::get_user_games(&state.db_pool, steam_id).await {
+                                Ok(g) => g,
+                                Err(e) => {
+                                    let _ = sender.send(Message::Text(serde_json::to_string(&ServerMessage::Error { 
+                                        message: format!("Failed to get games: {:?}", e) 
+                                    }).unwrap().into())).await;
+                                    continue;
+                                }
+                            };
+                            
+                            let games_to_scan: Vec<_> = all_games.iter()
+                                .filter(|g| recent_appids.contains(&g.appid))
+                                .collect();
+                            
+                            let total = games_to_scan.len();
+                            tracing::info!("Scanning {} recently played games for achievements", total);
+                            
+                            // Send progress start
+                            let _ = sender.send(Message::Text(serde_json::to_string(&ServerMessage::SyncProgress { 
+                                state: overachiever_core::SyncState::Starting 
+                            }).unwrap().into())).await;
+                            
+                            let mut total_achievements = 0i32;
+                            let mut total_unlocked = 0i32;
+                            let mut games_with_ach = 0i32;
+                            let mut completion_sum = 0f32;
+                            
+                            for (i, game) in games_to_scan.iter().enumerate() {
+                                // Send progress update
+                                let _ = sender.send(Message::Text(serde_json::to_string(&ServerMessage::SyncProgress { 
+                                    state: overachiever_core::SyncState::ScrapingAchievements {
+                                        current: i as i32 + 1,
+                                        total: total as i32,
+                                        game_name: game.name.clone(),
+                                    }
+                                }).unwrap().into())).await;
+                                
+                                // Fetch achievements and schema
+                                let achievements = crate::steam_api::fetch_achievements(api_key, steam_id_u64, game.appid).await.unwrap_or_default();
+                                let schema = crate::steam_api::fetch_achievement_schema(api_key, game.appid).await.unwrap_or_default();
+                                
+                                // Store schema
+                                for s in &schema {
+                                    let _ = crate::db::upsert_achievement_schema(&state.db_pool, game.appid, s).await;
+                                }
+                                
+                                // Store achievements and count
+                                let ach_total = achievements.len() as i32;
+                                let mut ach_unlocked = 0i32;
+                                
+                                for ach in &achievements {
+                                    let _ = crate::db::upsert_user_achievement(&state.db_pool, steam_id, game.appid, ach).await;
+                                    if ach.achieved == 1 {
+                                        ach_unlocked += 1;
+                                    }
+                                }
+                                
+                                // Update game achievement counts
+                                let _ = crate::db::update_game_achievements(&state.db_pool, steam_id, game.appid, ach_total, ach_unlocked).await;
+                                
+                                // Track totals
+                                if ach_total > 0 {
+                                    total_achievements += ach_total;
+                                    total_unlocked += ach_unlocked;
+                                    games_with_ach += 1;
+                                    completion_sum += (ach_unlocked as f32 / ach_total as f32) * 100.0;
+                                }
+                                
+                                // Small delay to avoid rate limiting
+                                tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
+                            }
+                            
+                            // Record achievement history if we scanned any games with achievements
+                            if games_with_ach > 0 {
+                                let avg_completion = completion_sum / games_with_ach as f32;
+                                let _ = crate::db::insert_achievement_history(&state.db_pool, steam_id, total_achievements, total_unlocked, games_with_ach, avg_completion).await;
+                            }
+                            
+                            // Get updated games and return
+                            match crate::db::get_user_games(&state.db_pool, steam_id).await {
+                                Ok(user_games) => {
+                                    let result = overachiever_core::SyncResult {
+                                        games_updated: total as i32,
+                                        achievements_updated: total_achievements,
+                                        new_games: 0,
+                                    };
+                                    ServerMessage::SyncComplete { result, games: user_games }
+                                }
+                                Err(e) => ServerMessage::Error { message: format!("Failed to fetch games: {:?}", e) }
                             }
                         }
                     } else {
                         ServerMessage::Error { message: "Steam API key not configured on server".to_string() }
+                    }
+                } else {
+                    ServerMessage::AuthError { reason: "Not authenticated".to_string() }
+                }
+            }
+            
+            ClientMessage::FullScan { force } => {
+                if let Some(ref steam_id) = authenticated_steam_id {
+                    if let Some(ref api_key) = state.steam_api_key {
+                        tracing::info!("Starting full achievement scan for user {} (force={})", steam_id, force);
+                        let steam_id_u64: u64 = steam_id.parse().unwrap_or(0);
+                        
+                        // Get games that need scanning
+                        let games = match crate::db::get_user_games(&state.db_pool, steam_id).await {
+                            Ok(g) => g,
+                            Err(e) => {
+                                let _ = sender.send(Message::Text(serde_json::to_string(&ServerMessage::Error { 
+                                    message: format!("Failed to get games: {:?}", e) 
+                                }).unwrap().into())).await;
+                                continue;
+                            }
+                        };
+                        
+                        let games_to_scan: Vec<_> = if force {
+                            games.iter().collect()
+                        } else {
+                            games.iter().filter(|g| g.achievements_total.is_none()).collect()
+                        };
+                        
+                        let total = games_to_scan.len();
+                        tracing::info!("Scanning {} games for achievements", total);
+                        
+                        // Send progress start
+                        let _ = sender.send(Message::Text(serde_json::to_string(&ServerMessage::SyncProgress { 
+                            state: overachiever_core::SyncState::Starting 
+                        }).unwrap().into())).await;
+                        
+                        let mut total_achievements = 0i32;
+                        let mut total_unlocked = 0i32;
+                        let mut games_with_ach = 0i32;
+                        let mut completion_sum = 0f32;
+                        
+                        for (i, game) in games_to_scan.iter().enumerate() {
+                            // Send progress update
+                            let _ = sender.send(Message::Text(serde_json::to_string(&ServerMessage::SyncProgress { 
+                                state: overachiever_core::SyncState::ScrapingAchievements {
+                                    current: i as i32 + 1,
+                                    total: total as i32,
+                                    game_name: game.name.clone(),
+                                }
+                            }).unwrap().into())).await;
+                            
+                            // Fetch achievements and schema
+                            let achievements = crate::steam_api::fetch_achievements(api_key, steam_id_u64, game.appid).await.unwrap_or_default();
+                            let schema = crate::steam_api::fetch_achievement_schema(api_key, game.appid).await.unwrap_or_default();
+                            
+                            // Store schema
+                            for s in &schema {
+                                let _ = crate::db::upsert_achievement_schema(&state.db_pool, game.appid, s).await;
+                            }
+                            
+                            // Store achievements and count
+                            let ach_total = achievements.len() as i32;
+                            let mut ach_unlocked = 0i32;
+                            
+                            for ach in &achievements {
+                                let _ = crate::db::upsert_user_achievement(&state.db_pool, steam_id, game.appid, ach).await;
+                                if ach.achieved == 1 {
+                                    ach_unlocked += 1;
+                                }
+                            }
+                            
+                            // Update game achievement counts
+                            let _ = crate::db::update_game_achievements(&state.db_pool, steam_id, game.appid, ach_total, ach_unlocked).await;
+                            
+                            // Track totals
+                            if ach_total > 0 {
+                                total_achievements += ach_total;
+                                total_unlocked += ach_unlocked;
+                                games_with_ach += 1;
+                                completion_sum += (ach_unlocked as f32 / ach_total as f32) * 100.0;
+                            }
+                            
+                            // Small delay to avoid rate limiting
+                            tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
+                        }
+                        
+                        // Record achievement history
+                        let avg_completion = if games_with_ach > 0 { completion_sum / games_with_ach as f32 } else { 0.0 };
+                        let _ = crate::db::insert_achievement_history(&state.db_pool, steam_id, total_achievements, total_unlocked, games_with_ach, avg_completion).await;
+                        
+                        // Get updated games and return
+                        match crate::db::get_user_games(&state.db_pool, steam_id).await {
+                            Ok(user_games) => {
+                                let result = overachiever_core::SyncResult {
+                                    games_updated: total as i32,
+                                    achievements_updated: total_achievements,
+                                    new_games: 0,
+                                };
+                                ServerMessage::SyncComplete { result, games: user_games }
+                            }
+                            Err(e) => ServerMessage::Error { message: format!("Failed to fetch games: {:?}", e) }
+                        }
+                    } else {
+                        ServerMessage::Error { message: "Steam API key not configured on server".to_string() }
+                    }
+                } else {
+                    ServerMessage::AuthError { reason: "Not authenticated".to_string() }
+                }
+            }
+            
+            ClientMessage::FetchHistory => {
+                if let Some(ref steam_id) = authenticated_steam_id {
+                    let run_history = crate::db::get_run_history(&state.db_pool, steam_id).await.unwrap_or_default();
+                    let achievement_history = crate::db::get_achievement_history(&state.db_pool, steam_id).await.unwrap_or_default();
+                    ServerMessage::History {
+                        run_history,
+                        achievement_history,
+                        log_entries: vec![], // TODO: Implement log entries
                     }
                 } else {
                     ServerMessage::AuthError { reason: "Not authenticated".to_string() }

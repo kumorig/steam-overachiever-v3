@@ -118,13 +118,13 @@ impl SteamOverachieverApp {
         
         TableBuilder::new(ui)
             .striped(true)
-            .resizable(true)
+            .resizable(false)
             .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-            .column(Column::remainder().at_least(100.0).clip(true)) // Name
-            .column(Column::initial(90.0).at_least(70.0)) // Last Played
-            .column(Column::initial(80.0).at_least(60.0)) // Playtime
-            .column(Column::initial(100.0).at_least(80.0)) // Achievements
-            .column(Column::initial(60.0).at_least(40.0)) // Percent
+            .column(Column::remainder().at_least(100.0).clip(true).resizable(true)) // Name - resizable
+            .column(Column::exact(90.0)) // Last Played - fixed
+            .column(Column::exact(80.0)) // Playtime - fixed
+            .column(Column::exact(100.0)) // Achievements - fixed
+            .column(Column::exact(60.0)) // Percent - fixed
             .min_scrolled_height(0.0)
             .max_scroll_height(available_height)
             .header(20.0, |mut header| {

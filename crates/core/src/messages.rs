@@ -19,6 +19,12 @@ pub enum ClientMessage {
     /// Request sync from Steam API (server-side)
     SyncFromSteam,
     
+    /// Request full achievement scan (scrape all games)
+    FullScan { force: bool },
+    
+    /// Request history data
+    FetchHistory,
+    
     /// Submit a game rating
     SubmitRating { 
         appid: u64, 

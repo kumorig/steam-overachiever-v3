@@ -134,7 +134,7 @@ impl SteamOverachieverApp {
                             if ui.add(
                                 egui::TextEdit::singleline(&mut self.config.steam_id)
                                     .desired_width(180.0)
-                                    .hint_text("76561197960287930")
+                                    .hint_text("12345678901234567")
                             ).changed() {
                                 let _ = self.config.save();
                             }

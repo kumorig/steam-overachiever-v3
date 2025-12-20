@@ -108,6 +108,14 @@ impl WsClient {
         self.send(&ClientMessage::SyncFromSteam);
     }
     
+    pub fn full_scan(&self, force: bool) {
+        self.send(&ClientMessage::FullScan { force });
+    }
+    
+    pub fn fetch_history(&self) {
+        self.send(&ClientMessage::FetchHistory);
+    }
+    
     pub fn submit_rating(&self, appid: u64, rating: u8, comment: Option<String>) {
         self.send(&ClientMessage::SubmitRating { appid, rating, comment });
     }

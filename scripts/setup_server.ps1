@@ -42,6 +42,8 @@ Write-Host "Setting up server..." -ForegroundColor Yellow
 
 # Run commands one by one to avoid line ending issues
 plink tatsugo "sudo mkdir -p /var/www/overachiever /opt/overachiever /opt/overachiever/src"
+plink tatsugo "sudo mkdir -p /var/cache/nginx/steam_images"
+plink tatsugo "sudo chown -R www-data:www-data /var/cache/nginx/steam_images"
 plink tatsugo "sudo chown -R `$USER:`$USER /opt/overachiever"
 plink tatsugo "sudo chown -R www-data:www-data /var/www/overachiever"
 plink tatsugo "sudo mv /tmp/nginx-overachiever.conf /etc/nginx/sites-available/overachiever.space"

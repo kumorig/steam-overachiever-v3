@@ -16,6 +16,9 @@ egui_extras = { version = "0.33.3", features = ["all_loaders", "http", "image"] 
 egui_plot = "0.34.0"
 egui-phosphor = "0.11.0"
 
+# Image format support for egui
+image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
+
 # WASM bindings
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"

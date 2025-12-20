@@ -279,3 +279,196 @@ pub async fn upsert_games(
     
     Ok(count)
 }
+
+/// Update achievement counts for a game
+pub async fn update_game_achievements(
+    pool: &Pool,
+    steam_id: &str,
+    appid: u64,
+    total: i32,
+    unlocked: i32,
+) -> Result<(), DbError> {
+    let client = pool.get().await?;
+    let steam_id_int: i64 = steam_id.parse().unwrap_or(0);
+    let now = Utc::now();
+    
+    client.execute(
+        r#"
+        UPDATE user_games
+        SET achievements_total = $3, achievements_unlocked = $4, last_sync = $5
+        WHERE steam_id = $1 AND appid = $2
+        "#,
+        &[
+            &steam_id_int,
+            &(appid as i64),
+            &total,
+            &unlocked,
+            &now,
+        ]
+    ).await?;
+    
+    Ok(())
+}
+
+/// Store achievement schema
+pub async fn upsert_achievement_schema(
+    pool: &Pool,
+    appid: u64,
+    schema: &overachiever_core::AchievementSchema,
+) -> Result<(), DbError> {
+    let client = pool.get().await?;
+    
+    client.execute(
+        r#"
+        INSERT INTO achievement_schemas (appid, apiname, display_name, description, icon, icon_gray)
+        VALUES ($1, $2, $3, $4, $5, $6)
+        ON CONFLICT (appid, apiname) DO UPDATE SET
+            display_name = EXCLUDED.display_name,
+            description = EXCLUDED.description,
+            icon = EXCLUDED.icon,
+            icon_gray = EXCLUDED.icon_gray
+        "#,
+        &[
+            &(appid as i64),
+            &schema.name,
+            &schema.display_name,
+            &schema.description,
+            &schema.icon,
+            &schema.icongray,
+        ]
+    ).await?;
+    
+    Ok(())
+}
+
+/// Store user achievement progress
+pub async fn upsert_user_achievement(
+    pool: &Pool,
+    steam_id: &str,
+    appid: u64,
+    achievement: &overachiever_core::Achievement,
+) -> Result<(), DbError> {
+    let client = pool.get().await?;
+    let steam_id_int: i64 = steam_id.parse().unwrap_or(0);
+    let achieved = achievement.achieved == 1;
+    let unlocktime: Option<DateTime<Utc>> = if achievement.unlocktime > 0 {
+        chrono::DateTime::from_timestamp(achievement.unlocktime as i64, 0)
+    } else {
+        None
+    };
+    
+    client.execute(
+        r#"
+        INSERT INTO user_achievements (steam_id, appid, apiname, achieved, unlocktime)
+        VALUES ($1, $2, $3, $4, $5)
+        ON CONFLICT (steam_id, appid, apiname) DO UPDATE SET
+            achieved = EXCLUDED.achieved,
+            unlocktime = COALESCE(EXCLUDED.unlocktime, user_achievements.unlocktime)
+        "#,
+        &[
+            &steam_id_int,
+            &(appid as i64),
+            &achievement.apiname,
+            &achieved,
+            &unlocktime,
+        ]
+    ).await?;
+    
+    Ok(())
+}
+
+/// Get run history for a user
+pub async fn get_run_history(pool: &Pool, steam_id: &str) -> Result<Vec<overachiever_core::RunHistory>, DbError> {
+    let client = pool.get().await?;
+    let steam_id_int: i64 = steam_id.parse().unwrap_or(0);
+    
+    let rows = client.query(
+        r#"
+        SELECT id, run_at, total_games
+        FROM run_history
+        WHERE steam_id = $1
+        ORDER BY run_at
+        "#,
+        &[&steam_id_int]
+    ).await?;
+    
+    let history = rows.into_iter().map(|row| {
+        overachiever_core::RunHistory {
+            id: row.get::<_, i64>("id"),
+            run_at: row.get("run_at"),
+            total_games: row.get("total_games"),
+        }
+    }).collect();
+    
+    Ok(history)
+}
+
+/// Get achievement history for a user  
+pub async fn get_achievement_history(pool: &Pool, steam_id: &str) -> Result<Vec<overachiever_core::AchievementHistory>, DbError> {
+    let client = pool.get().await?;
+    let steam_id_int: i64 = steam_id.parse().unwrap_or(0);
+    
+    let rows = client.query(
+        r#"
+        SELECT id, recorded_at, total_achievements, unlocked_achievements, games_with_achievements, avg_completion_percent
+        FROM achievement_history
+        WHERE steam_id = $1
+        ORDER BY recorded_at
+        "#,
+        &[&steam_id_int]
+    ).await?;
+    
+    let history = rows.into_iter().map(|row| {
+        overachiever_core::AchievementHistory {
+            id: row.get::<_, i64>("id"),
+            recorded_at: row.get("recorded_at"),
+            total_achievements: row.get("total_achievements"),
+            unlocked_achievements: row.get("unlocked_achievements"),
+            games_with_achievements: row.get("games_with_achievements"),
+            avg_completion_percent: row.get::<_, f64>("avg_completion_percent") as f32,
+        }
+    }).collect();
+    
+    Ok(history)
+}
+
+/// Record a run history entry
+pub async fn insert_run_history(pool: &Pool, steam_id: &str, total_games: i32) -> Result<(), DbError> {
+    let client = pool.get().await?;
+    let steam_id_int: i64 = steam_id.parse().unwrap_or(0);
+    let now = Utc::now();
+    
+    client.execute(
+        r#"
+        INSERT INTO run_history (steam_id, run_at, total_games)
+        VALUES ($1, $2, $3)
+        "#,
+        &[&steam_id_int, &now, &total_games]
+    ).await?;
+    
+    Ok(())
+}
+
+/// Record achievement history snapshot
+pub async fn insert_achievement_history(
+    pool: &Pool,
+    steam_id: &str,
+    total_achievements: i32,
+    unlocked_achievements: i32,
+    games_with_achievements: i32,
+    avg_completion_percent: f32,
+) -> Result<(), DbError> {
+    let client = pool.get().await?;
+    let steam_id_int: i64 = steam_id.parse().unwrap_or(0);
+    let now = Utc::now();
+    
+    client.execute(
+        r#"
+        INSERT INTO achievement_history (steam_id, recorded_at, total_achievements, unlocked_achievements, games_with_achievements, avg_completion_percent)
+        VALUES ($1, $2, $3, $4, $5, $6)
+        "#,
+        &[&steam_id_int, &now, &total_achievements, &unlocked_achievements, &games_with_achievements, &(avg_completion_percent as f64)]
+    ).await?;
+    
+    Ok(())
+}

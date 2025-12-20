@@ -3063,6 +3063,7 @@ dependencies = [
  "gloo-net",
  "gloo-storage",
  "gloo-timers",
+ "image",
  "js-sys",
  "overachiever-core",
  "serde",
