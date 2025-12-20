@@ -1,13 +1,18 @@
 //! WASM App state and UI - matches desktop version layout
 
 use eframe::egui;
-use egui_phosphor::regular;
-use overachiever_core::{Game, GameAchievement, UserProfile, RunHistory, AchievementHistory, SyncState, LogEntry, GdprConsent};
-use overachiever_core::{StatsPanelPlatform, StatsPanelConfig, render_stats_content, render_log_content, SidebarPanel};
-use overachiever_core::{GamesTablePlatform, SortColumn, SortOrder, TriFilter, sort_games, get_filtered_indices, render_filter_bar, render_games_table};
+use overachiever_core::{
+    Game, GameAchievement, UserProfile, RunHistory, AchievementHistory, 
+    SyncState, LogEntry, GdprConsent, SidebarPanel, SortColumn, SortOrder, TriFilter,
+    sort_games,
+};
 use std::collections::{HashMap, HashSet};
 
 use crate::ws_client::WsClient;
+use crate::storage::{
+    get_token_from_url, get_token_from_storage, save_token_to_storage, clear_token_from_storage,
+    get_ws_url_from_location, get_gdpr_consent_from_storage,
+};
 
 // ============================================================================
 // Types
@@ -42,162 +47,39 @@ impl AppState {
 
 pub struct WasmApp {
     // Connection
-    server_url: String,
-    ws_client: Option<WsClient>,
-    connection_state: ConnectionState,
+    pub(crate) server_url: String,
+    pub(crate) ws_client: Option<WsClient>,
+    pub(crate) connection_state: ConnectionState,
     
     // Data
-    games: Vec<Game>,
-    games_loaded: bool,
-    run_history: Vec<RunHistory>,
-    achievement_history: Vec<AchievementHistory>,
-    log_entries: Vec<LogEntry>,
+    pub(crate) games: Vec<Game>,
+    pub(crate) games_loaded: bool,
+    pub(crate) run_history: Vec<RunHistory>,
+    pub(crate) achievement_history: Vec<AchievementHistory>,
+    pub(crate) log_entries: Vec<LogEntry>,
     
     // UI state
-    status: String,
-    app_state: AppState,
-    scan_progress: Option<(i32, i32, String)>, // (current, total, game_name)
-    force_full_scan: bool,
-    sort_column: SortColumn,
-    sort_order: SortOrder,
-    expanded_rows: HashSet<u64>,
-    achievements_cache: HashMap<u64, Vec<GameAchievement>>,
-    filter_name: String,
-    filter_achievements: TriFilter,
-    filter_playtime: TriFilter,
-    show_login: bool,
-    include_unplayed_in_avg: bool,
-    show_stats_panel: bool,
-    sidebar_panel: SidebarPanel,
+    pub(crate) status: String,
+    pub(crate) app_state: AppState,
+    pub(crate) scan_progress: Option<(i32, i32, String)>, // (current, total, game_name)
+    pub(crate) force_full_scan: bool,
+    pub(crate) sort_column: SortColumn,
+    pub(crate) sort_order: SortOrder,
+    pub(crate) expanded_rows: HashSet<u64>,
+    pub(crate) achievements_cache: HashMap<u64, Vec<GameAchievement>>,
+    pub(crate) filter_name: String,
+    pub(crate) filter_achievements: TriFilter,
+    pub(crate) filter_playtime: TriFilter,
+    pub(crate) show_login: bool,
+    pub(crate) include_unplayed_in_avg: bool,
+    pub(crate) show_stats_panel: bool,
+    pub(crate) sidebar_panel: SidebarPanel,
     
     // Token from URL or storage
-    auth_token: Option<String>,
+    pub(crate) auth_token: Option<String>,
     
     // GDPR consent status
-    gdpr_consent: GdprConsent,
-}
-
-// ============================================================================
-// StatsPanelPlatform Implementation
-// ============================================================================
-
-impl StatsPanelPlatform for WasmApp {
-    fn games(&self) -> &[Game] {
-        &self.games
-    }
-    
-    fn run_history(&self) -> &[RunHistory] {
-        &self.run_history
-    }
-    
-    fn achievement_history(&self) -> &[AchievementHistory] {
-        &self.achievement_history
-    }
-    
-    fn log_entries(&self) -> &[LogEntry] {
-        &self.log_entries
-    }
-    
-    fn include_unplayed_in_avg(&self) -> bool {
-        self.include_unplayed_in_avg
-    }
-    
-    fn set_include_unplayed_in_avg(&mut self, value: bool) {
-        self.include_unplayed_in_avg = value;
-    }
-    
-    fn game_icon_source(&self, _ui: &egui::Ui, appid: u64, icon_hash: &str) -> egui::ImageSource<'static> {
-        let url = game_icon_url(appid, icon_hash);
-        egui::ImageSource::Uri(url.into())
-    }
-    
-    fn achievement_icon_source(&self, _ui: &egui::Ui, icon_url: &str) -> egui::ImageSource<'static> {
-        let proxied = proxy_steam_image_url(icon_url);
-        egui::ImageSource::Uri(proxied.into())
-    }
-    
-    fn submit_achievement_rating(&mut self, appid: u64, apiname: String, rating: u8) {
-        // Submit via REST API (async, fire-and-forget)
-        if let Some(token) = &self.auth_token {
-            let token = token.clone();
-            wasm_bindgen_futures::spawn_local(async move {
-                match crate::http_client::submit_achievement_rating(&token, appid, &apiname, rating).await {
-                    Ok(resp) => {
-                        web_sys::console::log_1(&format!("Rating submitted: {} stars for {}/{}", rating, resp.appid, resp.apiname).into());
-                    }
-                    Err(e) => {
-                        web_sys::console::error_1(&format!("Failed to submit rating: {}", e).into());
-                    }
-                }
-            });
-        }
-    }
-}
-
-impl GamesTablePlatform for WasmApp {
-    fn sort_column(&self) -> SortColumn {
-        self.sort_column
-    }
-    
-    fn sort_order(&self) -> SortOrder {
-        self.sort_order
-    }
-    
-    fn set_sort(&mut self, column: SortColumn) {
-        if self.sort_column == column {
-            self.sort_order = self.sort_order.toggle();
-        } else {
-            self.sort_column = column;
-            self.sort_order = SortOrder::Ascending;
-        }
-        sort_games(&mut self.games, self.sort_column, self.sort_order);
-    }
-    
-    fn filter_name(&self) -> &str {
-        &self.filter_name
-    }
-    
-    fn set_filter_name(&mut self, name: String) {
-        self.filter_name = name;
-    }
-    
-    fn filter_achievements(&self) -> TriFilter {
-        self.filter_achievements
-    }
-    
-    fn set_filter_achievements(&mut self, filter: TriFilter) {
-        self.filter_achievements = filter;
-    }
-    
-    fn filter_playtime(&self) -> TriFilter {
-        self.filter_playtime
-    }
-    
-    fn set_filter_playtime(&mut self, filter: TriFilter) {
-        self.filter_playtime = filter;
-    }
-    
-    fn is_expanded(&self, appid: u64) -> bool {
-        self.expanded_rows.contains(&appid)
-    }
-    
-    fn toggle_expanded(&mut self, appid: u64) {
-        if self.expanded_rows.contains(&appid) {
-            self.expanded_rows.remove(&appid);
-        } else {
-            self.expanded_rows.insert(appid);
-        }
-    }
-    
-    fn get_cached_achievements(&self, appid: u64) -> Option<&Vec<GameAchievement>> {
-        self.achievements_cache.get(&appid)
-    }
-    
-    fn request_achievements(&mut self, appid: u64) {
-        if let Some(client) = &self.ws_client {
-            client.fetch_achievements(appid);
-        }
-    }
+    pub(crate) gdpr_consent: GdprConsent,
 }
 
 impl WasmApp {
@@ -255,7 +137,7 @@ impl WasmApp {
     // Connection Management
     // ========================================================================
     
-    fn connect(&mut self) {
+    pub(crate) fn connect(&mut self) {
         if self.connection_state != ConnectionState::Disconnected {
             return;
         }
@@ -274,7 +156,7 @@ impl WasmApp {
         }
     }
     
-    fn check_ws_state(&mut self) {
+    pub(crate) fn check_ws_state(&mut self) {
         if let Some(client) = &self.ws_client {
             use crate::ws_client::WsState;
             match client.state() {
@@ -306,7 +188,7 @@ impl WasmApp {
         }
     }
     
-    fn check_messages(&mut self) {
+    pub(crate) fn check_messages(&mut self) {
         let messages = if let Some(client) = &self.ws_client {
             client.poll_messages()
         } else {
@@ -399,7 +281,7 @@ impl WasmApp {
     // Actions
     // ========================================================================
     
-    fn start_sync(&mut self) {
+    pub(crate) fn start_sync(&mut self) {
         if let Some(client) = &self.ws_client {
             self.app_state = AppState::Syncing;
             self.status = "Syncing from Steam...".to_string();
@@ -407,7 +289,7 @@ impl WasmApp {
         }
     }
     
-    fn start_full_scan(&mut self) {
+    pub(crate) fn start_full_scan(&mut self) {
         if let Some(client) = &self.ws_client {
             self.app_state = AppState::Scanning;
             self.status = "Starting full scan...".to_string();
@@ -415,12 +297,8 @@ impl WasmApp {
         }
     }
     
-    fn games_needing_scrape(&self) -> usize {
+    pub(crate) fn games_needing_scrape(&self) -> usize {
         self.games.iter().filter(|g| g.achievements_total.is_none()).count()
-    }
-    
-    fn do_sort_games(&mut self) {
-        sort_games(&mut self.games, self.sort_column, self.sort_order);
     }
 }
 
@@ -439,636 +317,12 @@ impl eframe::App for WasmApp {
         
         ctx.request_repaint();
         
-        // Render panels
+        // Render panels (implemented in panels.rs)
         self.render_top_panel(ctx);
         self.render_stats_panel(ctx);
         self.render_games_panel(ctx);
         
-        // Show GDPR modal if consent not set (always on top)
+        // Show GDPR modal if consent not set (implemented in gdpr.rs)
         self.render_gdpr_modal(ctx);
     }
-}
-
-impl WasmApp {
-    // ========================================================================
-    // Top Panel
-    // ========================================================================
-    
-    fn render_top_panel(&mut self, ctx: &egui::Context) {
-        let is_busy = self.app_state.is_busy();
-        let is_authenticated = matches!(self.connection_state, ConnectionState::Authenticated(_));
-        
-        egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                ui.heading("Overachiever");
-                ui.separator();
-                
-                match &self.connection_state {
-                    ConnectionState::Disconnected | ConnectionState::Connecting => {
-                        ui.spinner();
-                        ui.label("Connecting...");
-                    }
-                    ConnectionState::Connected => {
-                        ui.spinner();
-                        ui.label("Authenticating...");
-                    }
-                    ConnectionState::Authenticated(user) => {
-                        ui.label(format!("{} {}", regular::USER, user.display_name));
-                        ui.separator();
-                        
-                        // Sync button
-                        if ui.add_enabled(!is_busy, egui::Button::new(format!("{} Sync", regular::ARROWS_CLOCKWISE))).clicked() {
-                            self.start_sync();
-                        }
-                        
-                        // Full Scan button
-                        let needs_scan = self.games_needing_scrape();
-                        let scan_label = if needs_scan > 0 {
-                            format!("{} Full Scan ({})", regular::GAME_CONTROLLER, needs_scan)
-                        } else {
-                            format!("{} Full Scan", regular::GAME_CONTROLLER)
-                        };
-                        let can_scan = (needs_scan > 0 || self.force_full_scan) && self.games_loaded;
-                        if ui.add_enabled(!is_busy && can_scan, egui::Button::new(scan_label)).clicked() {
-                            self.start_full_scan();
-                        }
-                        
-                        ui.checkbox(&mut self.force_full_scan, "Force");
-                    }
-                    ConnectionState::Error(e) => {
-                        ui.colored_label(egui::Color32::RED, format!("{} {}", regular::WARNING, e));
-                        if ui.button("Retry").clicked() {
-                            self.connection_state = ConnectionState::Disconnected;
-                        }
-                    }
-                }
-                
-                ui.separator();
-                
-                if is_busy {
-                    ui.spinner();
-                    if let Some((current, total, _)) = &self.scan_progress {
-                        let progress = *current as f32 / *total as f32;
-                        ui.add(egui::ProgressBar::new(progress)
-                            .text(&self.status)
-                            .animate(true));
-                    } else {
-                        ui.label(&self.status);
-                    }
-                } else {
-                    ui.label(&self.status);
-                }
-                
-                // Logout on the right
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if is_authenticated {
-                        if ui.button(format!("{} Logout", regular::SIGN_OUT)).clicked() {
-                            self.auth_token = None;
-                            clear_token_from_storage();
-                            self.connection_state = ConnectionState::Disconnected;
-                            self.games.clear();
-                            self.games_loaded = false;
-                        }
-                        
-                        // GDPR button - only show if consent has been set
-                        if self.gdpr_consent.is_set() {
-                            if ui.button(format!("{} Privacy", regular::SHIELD_CHECK))
-                                .on_hover_text("Privacy Settings")
-                                .clicked() 
-                            {
-                                // Reset consent to show modal again
-                                self.gdpr_consent = GdprConsent::Unset;
-                                clear_gdpr_consent_from_storage();
-                            }
-                        }
-                    }
-                });
-            });
-        });
-    }
-    
-    // ========================================================================
-    // Stats Panel (Right Sidebar)
-    // ========================================================================
-    
-    fn render_stats_panel(&mut self, ctx: &egui::Context) {
-        if !matches!(self.connection_state, ConnectionState::Authenticated(_)) {
-            return;
-        }
-        
-        // Slightly darker background for the sidebar in dark mode
-        let panel_fill = ctx.style().visuals.window_fill();
-        let darker_fill = egui::Color32::from_rgb(
-            panel_fill.r().saturating_sub(8),
-            panel_fill.g().saturating_sub(8),
-            panel_fill.b().saturating_sub(8),
-        );
-        let panel_frame = egui::Frame::side_top_panel(&ctx.style())
-            .fill(darker_fill);
-        
-        if !self.show_stats_panel {
-            // Collapsed sidebar - show two buttons (Stats and Log)
-            egui::SidePanel::right("stats_panel_collapsed")
-                .exact_width(36.0)
-                .resizable(false)
-                .frame(panel_frame)
-                .show(ctx, |ui| {
-                    ui.add_space(4.0);
-                    // Stats button
-                    if ui.button(regular::CHART_LINE.to_string())
-                        .on_hover_text("Open Stats Panel")
-                        .clicked() 
-                    {
-                        self.sidebar_panel = SidebarPanel::Stats;
-                        self.show_stats_panel = true;
-                    }
-                    // Log button
-                    if ui.button(regular::SCROLL.to_string())
-                        .on_hover_text("Open Log Panel")
-                        .clicked()
-                    {
-                        self.sidebar_panel = SidebarPanel::Log;
-                        self.show_stats_panel = true;
-                    }
-                });
-            return;
-        }
-        
-        // Get available width - for mobile (< 600px), use full width
-        let available_width = ctx.input(|i| i.viewport().inner_rect.map(|r| r.width()).unwrap_or(800.0));
-        let is_mobile = available_width < 600.0;
-        
-        let panel = egui::SidePanel::right("stats_panel")
-            .resizable(!is_mobile)
-            .frame(panel_frame);
-        
-        let panel = if is_mobile {
-            panel.exact_width(available_width)
-        } else {
-            // Use min_width like desktop - panel content will fill this width
-            // but won't force the panel to grow larger
-            panel.min_width(320.0)
-        };
-        
-        panel.show(ctx, |ui| {
-                // Top navigation bar: close button + panel tabs
-                ui.horizontal(|ui| {
-                    // Close button (chevron right to collapse)
-                    if ui.small_button(regular::CARET_RIGHT.to_string())
-                        .on_hover_text("Close Panel")
-                        .clicked() 
-                    {
-                        self.show_stats_panel = false;
-                    }
-                    
-                    ui.separator();
-                    
-                    // Panel navigation tabs
-                    let stats_selected = self.sidebar_panel == SidebarPanel::Stats;
-                    let log_selected = self.sidebar_panel == SidebarPanel::Log;
-                    
-                    if ui.selectable_label(stats_selected, format!("{} Stats", regular::CHART_LINE)).clicked() {
-                        self.sidebar_panel = SidebarPanel::Stats;
-                    }
-                    if ui.selectable_label(log_selected, format!("{} Log", regular::SCROLL)).clicked() {
-                        self.sidebar_panel = SidebarPanel::Log;
-                    }
-                });
-                ui.separator();
-                
-                egui::ScrollArea::vertical().show(ui, |ui| {
-                    match self.sidebar_panel {
-                        SidebarPanel::Stats => {
-                            let config = StatsPanelConfig::wasm();
-                            render_stats_content(ui, self, &config);
-                        }
-                        SidebarPanel::Log => {
-                            render_log_content(ui, self);
-                        }
-                    }
-                });
-            });
-    }
-    
-    // ========================================================================
-    // Games Panel (Center)
-    // ========================================================================
-    
-    fn render_games_panel(&mut self, ctx: &egui::Context) {
-        egui::CentralPanel::default().show(ctx, |ui| {
-            if !matches!(self.connection_state, ConnectionState::Authenticated(_)) {
-                self.render_login_prompt(ui);
-                return;
-            }
-            
-            if self.games.is_empty() {
-                if !self.games_loaded {
-                    ui.centered_and_justified(|ui| {
-                        ui.spinner();
-                        ui.label("Loading games...");
-                    });
-                } else {
-                    ui.centered_and_justified(|ui| {
-                        ui.vertical_centered(|ui| {
-                            ui.label("No games found. Click 'Sync' to load your Steam library.");
-                            ui.add_space(12.0);
-                            if ui.button(format!("{} Sync from Steam", regular::ARROWS_CLOCKWISE)).clicked() {
-                                self.start_sync();
-                            }
-                        });
-                    });
-                }
-                return;
-            }
-            
-            ui.heading(format!("Games Library ({} games)", self.games.len()));
-            ui.separator();
-            
-            render_filter_bar(ui, self);
-            ui.add_space(4.0);
-            
-            let filtered_indices = get_filtered_indices(self);
-            let filtered_count = filtered_indices.len();
-            
-            if filtered_count != self.games.len() {
-                ui.label(format!("Showing {} of {} games", filtered_count, self.games.len()));
-            }
-            
-            let needs_fetch = render_games_table(ui, self, filtered_indices);
-            
-            // Fetch achievements for any rows that need them
-            if let Some(client) = &self.ws_client {
-                for appid in needs_fetch {
-                    client.fetch_achievements(appid);
-                }
-            }
-        });
-    }
-    
-    fn render_login_prompt(&self, ui: &mut egui::Ui) {
-        match &self.connection_state {
-            ConnectionState::Connecting | ConnectionState::Disconnected => {
-                ui.centered_and_justified(|ui| {
-                    ui.spinner();
-                    ui.label("Connecting to server...");
-                });
-            }
-            ConnectionState::Connected => {
-                egui::ScrollArea::vertical().show(ui, |ui| {
-                    ui.vertical_centered(|ui| {
-                        ui.add_space(20.0);
-                        
-                        // Explanation text - use LayoutJob for inline formatting without spacing issues
-                        let mut job = egui::text::LayoutJob::default();
-                        job.append("A ", 0.0, egui::TextFormat::simple(egui::FontId::default(), ui.style().visuals.text_color()));
-                        job.append("Steam ID", 0.0, egui::TextFormat::simple(egui::FontId::default(), egui::Color32::WHITE));
-                        job.append(" is needed to fetch your game list and to see achievement completion status.", 0.0, egui::TextFormat::simple(egui::FontId::default(), ui.style().visuals.text_color()));
-                        job.wrap = egui::text::TextWrapping {
-                            max_width: ui.available_width().min(500.0),
-                            ..Default::default()
-                        };
-                        ui.label(job);
-                        
-                        ui.add_space(12.0);
-                        
-                        let mut job2 = egui::text::LayoutJob::default();
-                        job2.append("You also need to set your game list to ", 0.0, egui::TextFormat::simple(egui::FontId::default(), ui.style().visuals.text_color()));
-                        job2.append("public", 0.0, egui::TextFormat::simple(egui::FontId::default(), egui::Color32::WHITE));
-                        job2.append(" in Steam privacy settings for this to work.", 0.0, egui::TextFormat::simple(egui::FontId::default(), ui.style().visuals.text_color()));
-                        job2.wrap = egui::text::TextWrapping {
-                            max_width: ui.available_width().min(500.0),
-                            ..Default::default()
-                        };
-                        ui.label(job2);
-                        
-                        ui.add_space(8.0);
-                        ui.label("If you do not want to share this data, then this site will not accomplish much for you.");
-                        
-                        ui.add_space(24.0);
-                        
-                        // Steam Sign In button (clickable image with border)
-                        let login_url = get_auth_url();
-                        let image = egui::Image::new(egui::include_image!("../../../assets/sits_02.png"))
-                            .fit_to_exact_size(egui::vec2(109.0, 66.0));
-                        
-                        let response = ui.add(
-                            egui::Button::image(image)
-                                .frame(true)
-                        );
-                        
-                        if response.clicked() {
-                            let _ = web_sys::window()
-                                .and_then(|w| w.location().set_href(&login_url).ok());
-                        }
-                        
-                        if response.hovered() {
-                            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-                        }
-                        
-                        ui.add_space(32.0);
-                        ui.separator();
-                        ui.add_space(16.0);
-                        
-                        // Instructions in collapsible section
-                        egui::CollapsingHeader::new("How to set your Steam profile to public")
-                            .default_open(false)
-                            .show(ui, |ui| {
-                                ui.add_space(16.0);
-                                
-                                ui.add(
-                                    egui::Image::new(egui::include_image!("../../../assets/step1.png"))
-                                        .fit_to_exact_size(egui::vec2(348.0,99.0))
-                                        .corner_radius(4.0)
-                                );
-                                ui.add_space(16.0);
-                                
-                                ui.add(
-                                    egui::Image::new(egui::include_image!("../../../assets/step2.png"))
-                                        .fit_to_exact_size(egui::vec2(348.0, 200.0))
-                                        .corner_radius(4.0)
-                                );
-                                ui.add_space(16.0);
-                                
-                                ui.add(
-                                    egui::Image::new(egui::include_image!("../../../assets/step3.png"))
-                                        .fit_to_exact_size(egui::vec2(300.0, 600.0))
-                                        .corner_radius(4.0)
-                                );
-                                ui.add_space(16.0);
-                                
-                                ui.add(
-                                    egui::Image::new(egui::include_image!("../../../assets/step4.png"))
-                                        .fit_to_exact_size(egui::vec2(500.0, 300.0))
-                                        .corner_radius(4.0)
-                                );
-                            });
-                        
-                        ui.add_space(20.0);
-                    });
-                });
-            }
-            ConnectionState::Error(e) => {
-                ui.centered_and_justified(|ui| {
-                    ui.colored_label(egui::Color32::RED, format!("Error: {}", e));
-                });
-            }
-            ConnectionState::Authenticated(_) => {}
-        }
-    }
-    
-    // ========================================================================
-    // GDPR Modal
-    // ========================================================================
-    
-    fn render_gdpr_modal(&mut self, ctx: &egui::Context) {
-        // Only show if consent not set
-        if self.gdpr_consent.is_set() {
-            return;
-        }
-        
-        // Semi-transparent backdrop
-        let screen_rect = ctx.input(|i| i.viewport().inner_rect.unwrap_or(egui::Rect::NOTHING));
-        egui::Area::new(egui::Id::new("gdpr_backdrop"))
-            .fixed_pos(screen_rect.min)
-            .show(ctx, |ui| {
-                let painter = ui.painter();
-                painter.rect_filled(
-                    screen_rect,
-                    0.0,
-                    egui::Color32::from_black_alpha(180),
-                );
-            });
-        
-        // Modal window
-        egui::Window::new(format!("{} Privacy & Data Usage", regular::SHIELD_CHECK))
-            .collapsible(false)
-            .resizable(false)
-            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-            .fixed_size([450.0, 0.0])
-            .show(ctx, |ui| {
-                ui.vertical(|ui| {
-                    ui.add_space(8.0);
-                    
-                    ui.label("This application processes personal data to provide its services:");
-                    
-                    ui.add_space(12.0);
-                    
-                    // Data we collect section
-                    ui.heading("Data We Process");
-                    ui.add_space(4.0);
-                    
-                    egui::Frame::new()
-                        .fill(ui.style().visuals.extreme_bg_color)
-                        .corner_radius(4.0)
-                        .inner_margin(8.0)
-                        .show(ui, |ui| {
-                            ui.label("• Your Steam ID (public identifier)");
-                            ui.label("• Your Steam display name");
-                            ui.label("• Your game library (via Steam API)");
-                            ui.label("• Achievement data for your games");
-                            ui.label("• Session authentication tokens");
-                        });
-                    
-                    ui.add_space(12.0);
-                    
-                    // Purpose section
-                    ui.heading("Purpose");
-                    ui.add_space(4.0);
-                    ui.label("This data is used to display your game library and track achievement progress. Your data is stored on our server and associated with your Steam ID.");
-                    
-                    ui.add_space(12.0);
-                    
-                    // Third party section
-                    ui.heading("Third Parties");
-                    ui.add_space(4.0);
-                    ui.label("We use the Steam Web API to fetch your public game and achievement data. No data is shared with other third parties.");
-                    
-                    ui.add_space(16.0);
-                    ui.separator();
-                    ui.add_space(8.0);
-                    
-                    // Buttons
-                    ui.horizontal(|ui| {
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui.button(format!("{} Accept", regular::CHECK))
-                                .on_hover_text("Accept data processing and continue")
-                                .clicked() 
-                            {
-                                self.gdpr_consent = GdprConsent::Accepted;
-                                save_gdpr_consent_to_storage(GdprConsent::Accepted);
-                            }
-                            
-                            if ui.button(format!("{} Decline", regular::X))
-                                .on_hover_text("Decline - you won't be able to use the application")
-                                .clicked() 
-                            {
-                                self.gdpr_consent = GdprConsent::Declined;
-                                save_gdpr_consent_to_storage(GdprConsent::Declined);
-                                // Clear any existing auth data
-                                self.auth_token = None;
-                                clear_token_from_storage();
-                            }
-                        });
-                    });
-                    
-                    ui.add_space(4.0);
-                });
-            });
-    }
-}
-
-// ============================================================================
-// Helper Functions
-// ============================================================================
-
-fn get_token_from_url() -> Option<String> {
-    web_sys::window()
-        .and_then(|w| w.location().search().ok())
-        .and_then(|search| {
-            search.strip_prefix('?')
-                .and_then(|s| {
-                    s.split('&')
-                        .find(|p| p.starts_with("token="))
-                        .map(|p| p.strip_prefix("token=").unwrap_or("").to_string())
-                })
-        })
-        .filter(|t| !t.is_empty())
-}
-
-fn get_token_from_storage() -> Option<String> {
-    web_sys::window()
-        .and_then(|w| w.local_storage().ok())
-        .flatten()
-        .and_then(|storage| storage.get_item("overachiever_token").ok())
-        .flatten()
-}
-
-fn save_token_to_storage(token: &str) {
-    if let Some(storage) = web_sys::window()
-        .and_then(|w| w.local_storage().ok())
-        .flatten()
-    {
-        let _ = storage.set_item("overachiever_token", token);
-    }
-}
-
-fn clear_token_from_storage() {
-    if let Some(storage) = web_sys::window()
-        .and_then(|w| w.local_storage().ok())
-        .flatten()
-    {
-        let _ = storage.remove_item("overachiever_token");
-    }
-}
-
-// ============================================================================
-// GDPR Consent Storage
-// ============================================================================
-
-fn get_gdpr_consent_from_storage() -> GdprConsent {
-    web_sys::window()
-        .and_then(|w| w.local_storage().ok())
-        .flatten()
-        .and_then(|storage| storage.get_item("overachiever_gdpr_consent").ok())
-        .flatten()
-        .map(|s| match s.as_str() {
-            "accepted" => GdprConsent::Accepted,
-            "declined" => GdprConsent::Declined,
-            _ => GdprConsent::Unset,
-        })
-        .unwrap_or(GdprConsent::Unset)
-}
-
-fn save_gdpr_consent_to_storage(consent: GdprConsent) {
-    if let Some(storage) = web_sys::window()
-        .and_then(|w| w.local_storage().ok())
-        .flatten()
-    {
-        let value = match consent {
-            GdprConsent::Accepted => "accepted",
-            GdprConsent::Declined => "declined",
-            GdprConsent::Unset => "unset",
-        };
-        let _ = storage.set_item("overachiever_gdpr_consent", value);
-    }
-}
-
-fn clear_gdpr_consent_from_storage() {
-    if let Some(storage) = web_sys::window()
-        .and_then(|w| w.local_storage().ok())
-        .flatten()
-    {
-        let _ = storage.remove_item("overachiever_gdpr_consent");
-    }
-}
-
-fn get_ws_url_from_location() -> String {
-    web_sys::window()
-        .and_then(|w| {
-            let location = w.location();
-            let protocol = location.protocol().ok()?;
-            let host = location.host().ok()?;
-            let ws_protocol = if protocol == "https:" { "wss:" } else { "ws:" };
-            Some(format!("{}//{}/ws", ws_protocol, host))
-        })
-        .unwrap_or_else(|| "wss://overachiever.space/ws".to_string())
-}
-
-fn get_auth_url() -> String {
-    web_sys::window()
-        .and_then(|w| {
-            let location = w.location();
-            let origin = location.origin().ok()?;
-            Some(format!("{}/auth/steam", origin))
-        })
-        .unwrap_or_else(|| "/auth/steam".to_string())
-}
-
-/// Convert Steam CDN URLs to proxied URLs to avoid CORS issues
-/// Handles both steamcdn-a.akamaihd.net and media.steampowered.com URLs
-fn proxy_steam_image_url(url: &str) -> String {
-    // Get the current origin for relative URLs
-    let origin = web_sys::window()
-        .and_then(|w| w.location().origin().ok())
-        .unwrap_or_default();
-    
-    if url.contains("steamcdn-a.akamaihd.net") {
-        // https://steamcdn-a.akamaihd.net/steamcommunity/public/images/apps/...
-        // -> /steam-media/steamcommunity/public/images/apps/...
-        if let Some(path) = url.strip_prefix("https://steamcdn-a.akamaihd.net/") {
-            return format!("{}/steam-media/{}", origin, path);
-        }
-        if let Some(path) = url.strip_prefix("http://steamcdn-a.akamaihd.net/") {
-            return format!("{}/steam-media/{}", origin, path);
-        }
-    }
-    
-    if url.contains("media.steampowered.com") {
-        // https://media.steampowered.com/steamcommunity/public/images/apps/...
-        // -> /steam-media/steamcommunity/public/images/apps/...
-        if let Some(path) = url.strip_prefix("https://media.steampowered.com/") {
-            return format!("{}/steam-media/{}", origin, path);
-        }
-        if let Some(path) = url.strip_prefix("http://media.steampowered.com/") {
-            return format!("{}/steam-media/{}", origin, path);
-        }
-    }
-    
-    // Return original URL if not a Steam CDN URL
-    url.to_string()
-}
-
-/// Build a game icon URL using the proxy
-/// Game icons are at: media.steampowered.com/steamcommunity/public/images/apps/{appid}/{hash}.jpg
-fn game_icon_url(appid: u64, icon_hash: &str) -> String {
-    let origin = web_sys::window()
-        .and_then(|w| w.location().origin().ok())
-        .unwrap_or_default();
-    // Use steam-media proxy which routes to steamcdn-a.akamaihd.net
-    format!("{}/steam-media/steamcommunity/public/images/apps/{}/{}.jpg", origin, appid, icon_hash)
-}
-
-/// Build a game icon URL from appid and hash (alias for use in render_log)
-fn game_icon_url_from_hash(appid: u64, icon_hash: &str) -> String {
-    game_icon_url(appid, icon_hash)
 }

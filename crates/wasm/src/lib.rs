@@ -6,6 +6,11 @@
 #![cfg(target_arch = "wasm32")]
 
 mod app;
+mod gdpr;
+mod panels;
+mod platforms;
+mod steam_images;
+mod storage;
 mod ws_client;
 mod http_client;
 
