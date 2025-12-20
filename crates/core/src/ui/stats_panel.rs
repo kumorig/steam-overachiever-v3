@@ -1,0 +1,461 @@
+//! Stats panel - shared between desktop and WASM
+//! 
+//! Renders: Games over time graph, achievement progress, breakdown stats, activity log
+
+use egui::{self, Color32, RichText, Ui};
+use egui_plot::{Line, Plot, PlotPoints};
+use egui_phosphor::regular;
+
+use crate::{Game, RunHistory, AchievementHistory, LogEntry};
+
+/// Platform-specific operations needed for the stats panel
+pub trait StatsPanelPlatform {
+    /// Get the list of games
+    fn games(&self) -> &[Game];
+    
+    /// Get run history data
+    fn run_history(&self) -> &[RunHistory];
+    
+    /// Get achievement history data  
+    fn achievement_history(&self) -> &[AchievementHistory];
+    
+    /// Get log entries
+    fn log_entries(&self) -> &[LogEntry];
+    
+    /// Whether to include unplayed games in average calculation
+    fn include_unplayed_in_avg(&self) -> bool;
+    
+    /// Set the include_unplayed_in_avg toggle
+    fn set_include_unplayed_in_avg(&mut self, value: bool);
+    
+    /// Resolve a game icon URL to an ImageSource
+    /// `appid` and `icon_hash` are provided for building the URL
+    fn game_icon_source(&self, ui: &Ui, appid: u64, icon_hash: &str) -> egui::ImageSource<'static>;
+    
+    /// Resolve an achievement icon URL to an ImageSource
+    fn achievement_icon_source(&self, ui: &Ui, icon_url: &str) -> egui::ImageSource<'static>;
+}
+
+/// Configuration for how the stats panel should render
+#[derive(Clone, Copy)]
+pub struct StatsPanelConfig {
+    /// Fixed height for plots (None = use view_aspect)
+    pub plot_height: Option<f32>,
+    /// Whether to show axes on plots
+    pub show_plot_axes: bool,
+    /// Whether to allow plot interaction (drag/zoom/scroll)
+    pub allow_plot_interaction: bool,
+}
+
+impl Default for StatsPanelConfig {
+    fn default() -> Self {
+        Self {
+            plot_height: None,
+            show_plot_axes: true,
+            allow_plot_interaction: true,
+        }
+    }
+}
+
+impl StatsPanelConfig {
+    /// Config suitable for WASM (compact, no interaction)
+    pub fn wasm() -> Self {
+        Self {
+            plot_height: Some(120.0),
+            show_plot_axes: false,
+            allow_plot_interaction: false,
+        }
+    }
+    
+    /// Config suitable for desktop (interactive, aspect-based sizing)
+    pub fn desktop() -> Self {
+        Self {
+            plot_height: None,
+            show_plot_axes: true,
+            allow_plot_interaction: true,
+        }
+    }
+}
+
+// ============================================================================
+// Rendering Functions
+// ============================================================================
+
+/// Render the complete stats panel content (inside a scroll area)
+pub fn render_stats_content<P: StatsPanelPlatform>(
+    ui: &mut Ui,
+    platform: &mut P,
+    config: &StatsPanelConfig,
+) {
+    render_games_over_time(ui, platform, config);
+    ui.add_space(16.0);
+    render_achievement_progress(ui, platform, config);
+    ui.add_space(16.0);
+    render_breakdown(ui, platform);
+    ui.add_space(16.0);
+    render_log(ui, platform);
+}
+
+/// Render the "Games Over Time" graph
+pub fn render_games_over_time<P: StatsPanelPlatform>(
+    ui: &mut Ui,
+    platform: &P,
+    config: &StatsPanelConfig,
+) {
+    ui.heading("Games Over Time");
+    ui.separator();
+    
+    let run_history = platform.run_history();
+    
+    if run_history.is_empty() {
+        ui.label("No history yet. Sync to start tracking!");
+        return;
+    }
+    
+    let points: PlotPoints = run_history
+        .iter()
+        .enumerate()
+        .map(|(i, h)| [i as f64, h.total_games as f64])
+        .collect();
+    
+    let line = Line::new("Total Games", points)
+        .color(Color32::from_rgb(100, 180, 255));
+    
+    let mut plot = Plot::new("games_history");
+    
+    if let Some(height) = config.plot_height {
+        plot = plot.height(height).width(ui.available_width());
+    } else {
+        plot = plot.view_aspect(2.0);
+    }
+    
+    if !config.show_plot_axes {
+        plot = plot.show_axes([false, true]);
+    }
+    
+    if !config.allow_plot_interaction {
+        plot = plot
+            .allow_drag(false)
+            .allow_zoom(false)
+            .allow_scroll(false);
+    }
+    
+    plot.show(ui, |plot_ui| {
+        plot_ui.line(line);
+    });
+}
+
+/// Render the "Achievement Progress" graph with stats below
+pub fn render_achievement_progress<P: StatsPanelPlatform>(
+    ui: &mut Ui,
+    platform: &mut P,
+    config: &StatsPanelConfig,
+) {
+    ui.heading("Achievement Progress");
+    ui.separator();
+    
+    let achievement_history = platform.achievement_history();
+    
+    if achievement_history.is_empty() {
+        ui.label("No achievement data yet. Run a full scan to start tracking!");
+        return;
+    }
+    
+    // Line 1: Average game completion %
+    let avg_completion_points: PlotPoints = achievement_history
+        .iter()
+        .enumerate()
+        .map(|(i, h)| [i as f64, h.avg_completion_percent as f64])
+        .collect();
+    
+    // Line 2: Overall achievement % (unlocked / total)
+    let overall_pct_points: PlotPoints = achievement_history
+        .iter()
+        .enumerate()
+        .map(|(i, h)| {
+            let pct = if h.total_achievements > 0 {
+                h.unlocked_achievements as f64 / h.total_achievements as f64 * 100.0
+            } else {
+                0.0
+            };
+            [i as f64, pct]
+        })
+        .collect();
+    
+    // Calculate Y-axis bounds based on actual data
+    let all_values: Vec<f64> = achievement_history
+        .iter()
+        .flat_map(|h| {
+            let overall_pct = if h.total_achievements > 0 {
+                h.unlocked_achievements as f64 / h.total_achievements as f64 * 100.0
+            } else {
+                0.0
+            };
+            vec![h.avg_completion_percent as f64, overall_pct]
+        })
+        .collect();
+    
+    let min_y = all_values.iter().cloned().fold(f64::INFINITY, f64::min).max(0.0);
+    let max_y = all_values.iter().cloned().fold(f64::NEG_INFINITY, f64::max).min(100.0);
+    
+    // Add some padding (5% of range, minimum 1.0)
+    let range = max_y - min_y;
+    let padding = (range * 0.05).max(1.0);
+    let y_min = (min_y - padding).max(0.0);
+    let y_max = (max_y + padding).min(100.0);
+    
+    let avg_line = Line::new("Avg Game Completion %", avg_completion_points)
+        .color(Color32::from_rgb(100, 200, 100));
+    let overall_line = Line::new("Overall Achievement %", overall_pct_points)
+        .color(Color32::from_rgb(100, 150, 255));
+    
+    let mut plot = Plot::new("achievements_history")
+        .legend(egui_plot::Legend::default())
+        .include_y(y_min)
+        .include_y(y_max);
+    
+    if let Some(height) = config.plot_height {
+        plot = plot.height(height).width(ui.available_width());
+    } else {
+        plot = plot.view_aspect(2.0);
+    }
+    
+    if !config.show_plot_axes {
+        plot = plot.show_axes([false, true]);
+    }
+    
+    if !config.allow_plot_interaction {
+        plot = plot
+            .allow_drag(false)
+            .allow_zoom(false)
+            .allow_scroll(false);
+    }
+    
+    plot.show(ui, |plot_ui| {
+        plot_ui.line(avg_line);
+        plot_ui.line(overall_line);
+    });
+    
+    // Show current stats below the graph
+    render_current_stats(ui, platform);
+}
+
+/// Render the current stats (total achievements, avg completion, etc.)
+fn render_current_stats<P: StatsPanelPlatform>(ui: &mut Ui, platform: &mut P) {
+    let achievement_history = platform.achievement_history();
+    let Some(latest) = achievement_history.last() else {
+        return;
+    };
+    
+    ui.add_space(8.0);
+    
+    let yellow = Color32::from_rgb(255, 215, 0);
+    
+    let overall_pct = if latest.total_achievements > 0 {
+        latest.unlocked_achievements as f32 / latest.total_achievements as f32 * 100.0
+    } else {
+        0.0
+    };
+    
+    ui.horizontal(|ui| {
+        ui.label("Total achievements:");
+        ui.label(RichText::new(format!("{}", latest.unlocked_achievements)).color(yellow).strong());
+        ui.label("/");
+        ui.label(RichText::new(format!("{}", latest.total_achievements)).color(yellow).strong());
+        ui.label("(");
+        ui.label(RichText::new(format!("{:.1}%", overall_pct)).color(yellow).strong());
+        ui.label(")");
+    });
+    
+    // Calculate current avg completion based on toggle
+    let games = platform.games();
+    let games_with_ach: Vec<_> = games.iter()
+        .filter(|g| g.achievements_total.map(|t| t > 0).unwrap_or(false))
+        .collect();
+    
+    // Count played vs unplayed games (with achievements)
+    let played_count = games_with_ach.iter()
+        .filter(|g| g.playtime_forever > 0)
+        .count();
+    let unplayed_count = games_with_ach.len() - played_count;
+    let total_games_with_ach = games_with_ach.len();
+    
+    let include_unplayed = platform.include_unplayed_in_avg();
+    let completion_percents: Vec<f32> = if include_unplayed {
+        games_with_ach.iter()
+            .filter_map(|g| g.completion_percent())
+            .collect()
+    } else {
+        games_with_ach.iter()
+            .filter(|g| g.playtime_forever > 0)
+            .filter_map(|g| g.completion_percent())
+            .collect()
+    };
+    
+    let current_avg = if completion_percents.is_empty() {
+        0.0
+    } else {
+        completion_percents.iter().sum::<f32>() / completion_percents.len() as f32
+    };
+    
+    // Calculate unplayed percentage before the closure
+    let unplayed_pct = if total_games_with_ach > 0 {
+        unplayed_count as f32 / total_games_with_ach as f32 * 100.0
+    } else {
+        0.0
+    };
+    
+    ui.horizontal(|ui| {
+        ui.label("Avg. game completion:");
+        ui.label(RichText::new(format!("{:.1}%", current_avg)).color(yellow).strong());
+        let mut include = include_unplayed;
+        if ui.checkbox(&mut include, "Include unplayed").changed() {
+            platform.set_include_unplayed_in_avg(include);
+        }
+    });
+    
+    // Show unplayed games count and percentage
+    ui.horizontal(|ui| {
+        ui.label("Unplayed games:");
+        ui.label(RichText::new(format!("{}", unplayed_count)).color(yellow).strong());
+        ui.label("(");
+        ui.label(RichText::new(format!("{:.1}%", unplayed_pct)).color(yellow).strong());
+        ui.label(")");
+    });
+}
+
+/// Render the breakdown section with game counts
+pub fn render_breakdown<P: StatsPanelPlatform>(ui: &mut Ui, platform: &P) {
+    ui.heading(format!("{} Breakdown", regular::GAME_CONTROLLER));
+    ui.separator();
+    
+    let games = platform.games();
+    
+    if games.is_empty() {
+        ui.label("Sync your games to see stats.");
+        return;
+    }
+    
+    let yellow = Color32::from_rgb(255, 215, 0);
+    
+    let games_with_ach: Vec<_> = games.iter()
+        .filter(|g| g.achievements_total.map(|t| t > 0).unwrap_or(false))
+        .collect();
+    let total_with_ach = games_with_ach.len();
+    
+    ui.horizontal(|ui| {
+        ui.label("Total games:");
+        ui.label(RichText::new(format!("{}", games.len())).color(yellow).strong());
+    });
+    
+    ui.horizontal(|ui| {
+        ui.label("Games with achievements:");
+        ui.label(RichText::new(format!("{}", total_with_ach)).color(yellow).strong());
+    });
+    
+    let completed = games.iter()
+        .filter(|g| g.completion_percent().map(|p| p >= 100.0).unwrap_or(false))
+        .count();
+    ui.horizontal(|ui| {
+        ui.label(format!("{} 100% completed:", regular::MEDAL));
+        ui.label(RichText::new(format!("{}", completed)).color(yellow).strong());
+    });
+    
+    let needs_scan = games.iter().filter(|g| g.achievements_total.is_none()).count();
+    if needs_scan > 0 {
+        ui.horizontal(|ui| {
+            ui.label("Needs scanning:");
+            ui.label(RichText::new(format!("{}", needs_scan)).color(Color32::LIGHT_GRAY));
+        });
+    }
+}
+
+/// Render the activity log (achievements and first plays)
+pub fn render_log<P: StatsPanelPlatform>(ui: &mut Ui, platform: &P) {
+    // Colors for different elements
+    let date_color = Color32::from_rgb(130, 130, 130);  // Gray for dates
+    let game_color = Color32::from_rgb(100, 180, 255);  // Blue for game names
+    let achievement_color = Color32::from_rgb(255, 215, 0);  // Gold for achievement names
+    let alt_bg = Color32::from_rgba_unmultiplied(255, 255, 255, 8);  // Subtle alternating bg
+    
+    ui.collapsing(format!("{} Log", regular::SCROLL), |ui| {
+        let log_entries = platform.log_entries();
+        
+        if log_entries.is_empty() {
+            ui.label("No activity yet.");
+            return;
+        }
+        
+        for (i, entry) in log_entries.iter().enumerate() {
+            // Alternating background
+            let row_rect = ui.available_rect_before_wrap();
+            let row_rect = egui::Rect::from_min_size(
+                row_rect.min,
+                egui::vec2(row_rect.width(), 24.0)
+            );
+            if i % 2 == 1 {
+                ui.painter().rect_filled(row_rect, 2.0, alt_bg);
+            }
+            
+            match entry {
+                LogEntry::Achievement { appid, game_name, achievement_name, timestamp, achievement_icon, game_icon_url } => {
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 4.0;
+                        
+                        // Game icon (left)
+                        if let Some(icon_hash) = game_icon_url {
+                            if !icon_hash.is_empty() {
+                                let img_source = platform.game_icon_source(ui, *appid, icon_hash);
+                                ui.add(
+                                    egui::Image::new(img_source)
+                                        .fit_to_exact_size(egui::vec2(18.0, 18.0))
+                                        .corner_radius(2.0)
+                                );
+                            }
+                        }
+                        
+                        // Achievement icon (right of game icon)
+                        if !achievement_icon.is_empty() {
+                            let img_source = platform.achievement_icon_source(ui, achievement_icon);
+                            ui.add(
+                                egui::Image::new(img_source)
+                                    .fit_to_exact_size(egui::vec2(18.0, 18.0))
+                                    .corner_radius(2.0)
+                            );
+                        }
+                        
+                        ui.label(RichText::new(timestamp.format("%Y-%m-%d").to_string()).color(date_color).small());
+                        ui.label(RichText::new(achievement_name).color(achievement_color).strong());
+                        ui.label(RichText::new("in").small());
+                        ui.label(RichText::new(format!("{}!", game_name)).color(game_color));
+                    });
+                }
+                LogEntry::FirstPlay { appid, game_name, timestamp, game_icon_url } => {
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 4.0;
+                        
+                        // Game icon
+                        if let Some(icon_hash) = game_icon_url {
+                            if !icon_hash.is_empty() {
+                                let img_source = platform.game_icon_source(ui, *appid, icon_hash);
+                                ui.add(
+                                    egui::Image::new(img_source)
+                                        .fit_to_exact_size(egui::vec2(18.0, 18.0))
+                                        .corner_radius(2.0)
+                                );
+                            } else {
+                                ui.add_space(22.0);
+                            }
+                        } else {
+                            ui.add_space(22.0);
+                        }
+                        
+                        ui.label(RichText::new(timestamp.format("%Y-%m-%d").to_string()).color(date_color).small());
+                        ui.label(RichText::new(game_name).color(game_color));
+                        ui.label(RichText::new("played for the first time!").small());
+                    });
+                }
+            }
+        }
+    });
+}

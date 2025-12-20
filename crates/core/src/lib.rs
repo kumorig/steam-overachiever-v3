@@ -4,12 +4,18 @@
 //! - Data models shared between desktop, WASM, and backend
 //! - WebSocket message types for client-server communication
 //! - Error types
-//! - Data provider trait abstraction
+//! - Shared UI components (with `ui` feature)
 
 pub mod models;
 pub mod messages;
 pub mod error;
 
+#[cfg(feature = "ui")]
+pub mod ui;
+
 pub use models::*;
 pub use messages::*;
 pub use error::*;
+
+#[cfg(feature = "ui")]
+pub use ui::*;

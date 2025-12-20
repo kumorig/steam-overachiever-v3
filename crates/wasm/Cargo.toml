@@ -7,7 +7,7 @@ edition = "2021"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-overachiever-core = { path = "../core" }
+overachiever-core = { path = "../core", features = ["ui"] }
 
 # eframe for WASM (use glow backend for better web compatibility)
 eframe = { version = "0.33.3", default-features = false, features = ["glow"] }

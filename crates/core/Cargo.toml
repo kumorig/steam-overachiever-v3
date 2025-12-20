@@ -12,6 +12,12 @@ thiserror = "1"
 # Optional async support for trait definitions
 async-trait = { version = "0.1", optional = true }
 
+# Optional egui support for shared UI components
+egui = { version = "0.33", optional = true }
+egui_plot = { version = "0.34", optional = true }
+egui-phosphor = { version = "0.11", optional = true, features = ["regular"] }
+
 [features]
 default = []
 async = ["async-trait"]
+ui = ["egui", "egui_plot", "egui-phosphor"]
