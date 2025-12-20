@@ -107,21 +107,23 @@ pub fn render_games_over_time<P: StatsPanelPlatform>(
     
     let run_history = platform.run_history();
     
-    if run_history.is_empty() {
-        ui.label("No history yet. Sync to start tracking!");
-        return;
-    }
-    
-    let points: PlotPoints = run_history
-        .iter()
-        .enumerate()
-        .map(|(i, h)| [i as f64, h.total_games as f64])
-        .collect();
+    // Always create PlotPoints - use default if empty (required for WASM rendering)
+    let points: PlotPoints = if run_history.is_empty() {
+        PlotPoints::default()
+    } else {
+        run_history
+            .iter()
+            .enumerate()
+            .map(|(i, h)| [i as f64, h.total_games as f64])
+            .collect()
+    };
     
     let line = Line::new("Total Games", points)
         .color(Color32::from_rgb(100, 180, 255));
     
-    let mut plot = Plot::new("games_history");
+    // Build plot - use height/width for WASM, view_aspect for desktop
+    let mut plot = Plot::new("games_history")
+        .auto_bounds(egui::Vec2b::new(true, true));
     
     if let Some(height) = config.plot_height {
         plot = plot.height(height).width(ui.available_width());
@@ -143,6 +145,10 @@ pub fn render_games_over_time<P: StatsPanelPlatform>(
     plot.show(ui, |plot_ui| {
         plot_ui.line(line);
     });
+    
+    if run_history.is_empty() {
+        ui.label("No history yet. Sync to start tracking!");
+    }
 }
 
 /// Render the "Achievement Progress" graph with stats below
@@ -156,61 +162,65 @@ pub fn render_achievement_progress<P: StatsPanelPlatform>(
     
     let achievement_history = platform.achievement_history();
     
-    if achievement_history.is_empty() {
-        ui.label("No achievement data yet. Run a full scan to start tracking!");
-        return;
-    }
-    
-    // Line 1: Average game completion %
-    let avg_completion_points: PlotPoints = achievement_history
-        .iter()
-        .enumerate()
-        .map(|(i, h)| [i as f64, h.avg_completion_percent as f64])
-        .collect();
-    
-    // Line 2: Overall achievement % (unlocked / total)
-    let overall_pct_points: PlotPoints = achievement_history
-        .iter()
-        .enumerate()
-        .map(|(i, h)| {
-            let pct = if h.total_achievements > 0 {
-                h.unlocked_achievements as f64 / h.total_achievements as f64 * 100.0
-            } else {
-                0.0
-            };
-            [i as f64, pct]
-        })
-        .collect();
-    
-    // Calculate Y-axis bounds based on actual data
-    let all_values: Vec<f64> = achievement_history
-        .iter()
-        .flat_map(|h| {
-            let overall_pct = if h.total_achievements > 0 {
-                h.unlocked_achievements as f64 / h.total_achievements as f64 * 100.0
-            } else {
-                0.0
-            };
-            vec![h.avg_completion_percent as f64, overall_pct]
-        })
-        .collect();
-    
-    let min_y = all_values.iter().cloned().fold(f64::INFINITY, f64::min).max(0.0);
-    let max_y = all_values.iter().cloned().fold(f64::NEG_INFINITY, f64::max).min(100.0);
-    
-    // Add some padding (5% of range, minimum 1.0)
-    let range = max_y - min_y;
-    let padding = (range * 0.05).max(1.0);
-    let y_min = (min_y - padding).max(0.0);
-    let y_max = (max_y + padding).min(100.0);
+    // Always create PlotPoints and bounds - use defaults if empty (required for WASM rendering)
+    let (avg_completion_points, overall_pct_points, y_min, y_max) = if achievement_history.is_empty() {
+        (PlotPoints::default(), PlotPoints::default(), 0.0, 100.0)
+    } else {
+        // Line 1: Average game completion %
+        let avg_points: PlotPoints = achievement_history
+            .iter()
+            .enumerate()
+            .map(|(i, h)| [i as f64, h.avg_completion_percent as f64])
+            .collect();
+        
+        // Line 2: Overall achievement % (unlocked / total)
+        let overall_points: PlotPoints = achievement_history
+            .iter()
+            .enumerate()
+            .map(|(i, h)| {
+                let pct = if h.total_achievements > 0 {
+                    h.unlocked_achievements as f64 / h.total_achievements as f64 * 100.0
+                } else {
+                    0.0
+                };
+                [i as f64, pct]
+            })
+            .collect();
+        
+        // Calculate Y-axis bounds based on actual data
+        let all_values: Vec<f64> = achievement_history
+            .iter()
+            .flat_map(|h| {
+                let overall_pct = if h.total_achievements > 0 {
+                    h.unlocked_achievements as f64 / h.total_achievements as f64 * 100.0
+                } else {
+                    0.0
+                };
+                vec![h.avg_completion_percent as f64, overall_pct]
+            })
+            .collect();
+        
+        let min_y = all_values.iter().cloned().fold(f64::INFINITY, f64::min).max(0.0);
+        let max_y = all_values.iter().cloned().fold(f64::NEG_INFINITY, f64::max).min(100.0);
+        
+        // Add some padding (5% of range, minimum 1.0)
+        let range = max_y - min_y;
+        let padding = (range * 0.05).max(1.0);
+        let y_min = (min_y - padding).max(0.0);
+        let y_max = (max_y + padding).min(100.0);
+        
+        (avg_points, overall_points, y_min, y_max)
+    };
     
     let avg_line = Line::new("Avg Game Completion %", avg_completion_points)
         .color(Color32::from_rgb(100, 200, 100));
     let overall_line = Line::new("Overall Achievement %", overall_pct_points)
         .color(Color32::from_rgb(100, 150, 255));
     
+    // Build plot - use height/width for WASM, view_aspect for desktop
     let mut plot = Plot::new("achievements_history")
         .legend(egui_plot::Legend::default())
+        .auto_bounds(egui::Vec2b::new(true, true))
         .include_y(y_min)
         .include_y(y_max);
     
@@ -236,8 +246,12 @@ pub fn render_achievement_progress<P: StatsPanelPlatform>(
         plot_ui.line(overall_line);
     });
     
-    // Show current stats below the graph
-    render_current_stats(ui, platform);
+    if achievement_history.is_empty() {
+        ui.label("No achievement data yet. Run a full scan to start tracking!");
+    } else {
+        // Show current stats below the graph
+        render_current_stats(ui, platform);
+    }
 }
 
 /// Render the current stats (total achievements, avg completion, etc.)
