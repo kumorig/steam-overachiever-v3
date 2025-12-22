@@ -54,4 +54,20 @@ impl StatsPanelPlatform for SteamOverachieverApp {
             egui::ImageSource::Uri(icon_url.to_string().into())
         }
     }
+    
+    fn achievements_graph_tab(&self) -> usize {
+        self.achievements_graph_tab
+    }
+    
+    fn set_achievements_graph_tab(&mut self, tab: usize) {
+        self.achievements_graph_tab = tab;
+    }
+    
+    fn games_graph_tab(&self) -> usize {
+        self.games_graph_tab
+    }
+    
+    fn set_games_graph_tab(&mut self, tab: usize) {
+        self.games_graph_tab = tab;
+    }
 }

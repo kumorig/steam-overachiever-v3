@@ -8,6 +8,33 @@ use crate::app::SteamOverachieverApp;
 use crate::models::LogEntry;
 
 impl SteamOverachieverApp {
+    /// Calculate Y-axis bounds with padding for percentage values (0-100 clamped)
+    fn calc_y_bounds(values: &[f64]) -> (f64, f64) {
+        if values.is_empty() {
+            return (0.0, 100.0);
+        }
+        let min_y = values.iter().cloned().fold(f64::INFINITY, f64::min).max(0.0);
+        let max_y = values.iter().cloned().fold(f64::NEG_INFINITY, f64::max).min(100.0);
+        
+        let range = max_y - min_y;
+        let padding = (range).max(0.01);
+        ((min_y - padding).max(0.0), (max_y + padding).min(100.0))
+    }
+    
+    /// Calculate Y-axis bounds with padding for unbounded values (e.g. game counts)
+    fn calc_y_bounds_unbounded(values: &[f64]) -> (f64, f64) {
+        if values.is_empty() {
+            return (0.0, 100.0);
+        }
+        let min_y = values.iter().cloned().fold(f64::INFINITY, f64::min).max(0.0);
+        let max_y = values.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+        
+        // Add some padding (5% of range, minimum 1.0)
+        let range = max_y - min_y;
+        let padding = (range * 0.05).max(1.0);
+        ((min_y - padding).max(0.0), max_y + padding)
+    }
+    
     pub(crate) fn render_history_panel(&mut self, ctx: &egui::Context) {
         egui::SidePanel::right("history_panel")
             .min_width(350.0)
@@ -22,23 +49,72 @@ impl SteamOverachieverApp {
             });
     }
     
-    fn render_games_over_time(&self, ui: &mut egui::Ui) {
+    fn render_games_over_time(&mut self, ui: &mut egui::Ui) {
         ui.heading("Games Over Time");
         ui.separator();
         
         if self.run_history.is_empty() {
             ui.label("No history yet. Click 'Update' to start tracking!");
-        } else {
+            return;
+        }
+        
+        // Tab buttons
+        ui.horizontal(|ui| {
+            if ui.selectable_label(self.games_graph_tab == 0, "Total Games").clicked() {
+                self.games_graph_tab = 0;
+            }
+            if ui.selectable_label(self.games_graph_tab == 1, "Unplayed Games").clicked() {
+                self.games_graph_tab = 1;
+            }
+        });
+        
+        ui.add_space(4.0);
+        
+        if self.games_graph_tab == 0 {
+            // Total Games graph (zoomed to fit data)
+            let values: Vec<f64> = self.run_history
+                .iter()
+                .map(|h| h.total_games as f64)
+                .collect();
+            
             let points: PlotPoints = self.run_history
                 .iter()
                 .enumerate()
                 .map(|(i, h)| [i as f64, h.total_games as f64])
                 .collect();
             
-            let line = Line::new("Total Games", points);
+            let (y_min, y_max) = Self::calc_y_bounds_unbounded(&values);
+            let line = Line::new("Total Games", points)
+                .color(egui::Color32::from_rgb(100, 200, 100));
             
-            Plot::new("games_history")
+            Plot::new("games_history_total")
                 .view_aspect(2.0)
+                .include_y(y_min)
+                .include_y(y_max)
+                .show(ui, |plot_ui| {
+                    plot_ui.line(line);
+                });
+        } else {
+            // Unplayed Games graph
+            let values: Vec<f64> = self.run_history
+                .iter()
+                .map(|h| h.unplayed_games as f64)
+                .collect();
+            
+            let points: PlotPoints = self.run_history
+                .iter()
+                .enumerate()
+                .map(|(i, h)| [i as f64, h.unplayed_games as f64])
+                .collect();
+            
+            let (y_min, y_max) = Self::calc_y_bounds_unbounded(&values);
+            let line = Line::new("Unplayed Games", points)
+                .color(egui::Color32::from_rgb(255, 150, 100));
+            
+            Plot::new("games_history_unplayed")
+                .view_aspect(2.0)
+                .include_y(y_min)
+                .include_y(y_max)
                 .show(ui, |plot_ui| {
                     plot_ui.line(line);
                 });
@@ -54,63 +130,80 @@ impl SteamOverachieverApp {
             return;
         }
         
-        // Line 1: Average game completion %
-        let avg_completion_points: PlotPoints = self.achievement_history
-            .iter()
-            .enumerate()
-            .map(|(i, h)| [i as f64, h.avg_completion_percent as f64])
-            .collect();
+        // Tab buttons
+        ui.horizontal(|ui| {
+            if ui.selectable_label(self.achievements_graph_tab == 0, "Avg Game Completion %").clicked() {
+                self.achievements_graph_tab = 0;
+            }
+            if ui.selectable_label(self.achievements_graph_tab == 1, "Overall Achievement %").clicked() {
+                self.achievements_graph_tab = 1;
+            }
+        });
         
-        // Line 2: Overall achievement % (unlocked / total)
-        let overall_pct_points: PlotPoints = self.achievement_history
-            .iter()
-            .enumerate()
-            .map(|(i, h)| {
-                let pct = if h.total_achievements > 0 {
-                    h.unlocked_achievements as f64 / h.total_achievements as f64 * 100.0
-                } else {
-                    0.0
-                };
-                [i as f64, pct]
-            })
-            .collect();
+        ui.add_space(4.0);
         
-        // Calculate Y-axis bounds based on actual data
-        let all_values: Vec<f64> = self.achievement_history
-            .iter()
-            .flat_map(|h| {
-                let overall_pct = if h.total_achievements > 0 {
-                    h.unlocked_achievements as f64 / h.total_achievements as f64 * 100.0
-                } else {
-                    0.0
-                };
-                vec![h.avg_completion_percent as f64, overall_pct]
-            })
-            .collect();
-        
-        let min_y = all_values.iter().cloned().fold(f64::INFINITY, f64::min).max(0.0);
-        let max_y = all_values.iter().cloned().fold(f64::NEG_INFINITY, f64::max).min(100.0);
-        
-        // Add some padding (5% of range, minimum 1.0)
-        let range = max_y - min_y;
-        let padding = (range * 0.05).max(1.0);
-        let y_min = (min_y - padding).max(0.0);
-        let y_max = (max_y + padding).min(100.0);
-        
-        let avg_line = Line::new("Avg Game Completion %", avg_completion_points)
-            .color(egui::Color32::from_rgb(100, 200, 100));
-        let overall_line = Line::new("Overall Achievement %", overall_pct_points)
-            .color(egui::Color32::from_rgb(100, 150, 255));
-        
-        Plot::new("achievements_history")
-            .view_aspect(2.0)
-            .legend(egui_plot::Legend::default())
-            .include_y(y_min)
-            .include_y(y_max)
-            .show(ui, |plot_ui| {
-                plot_ui.line(avg_line);
-                plot_ui.line(overall_line);
-            });
+        if self.achievements_graph_tab == 0 {
+            // Avg Game Completion %
+            let values: Vec<f64> = self.achievement_history
+                .iter()
+                .map(|h| h.avg_completion_percent as f64)
+                .collect();
+            
+            let points: PlotPoints = self.achievement_history
+                .iter()
+                .enumerate()
+                .map(|(i, h)| [i as f64, h.avg_completion_percent as f64])
+                .collect();
+            
+            let (y_min, y_max) = Self::calc_y_bounds(&values);
+            let line = Line::new("Avg Game Completion %", points)
+                .color(egui::Color32::from_rgb(100, 200, 100));
+            
+            Plot::new("achievements_history_avg")
+                .view_aspect(2.0)
+                .include_y(y_min)
+                .include_y(y_max)
+                .show(ui, |plot_ui| {
+                    plot_ui.line(line);
+                });
+        } else {
+            // Overall Achievement %
+            let values: Vec<f64> = self.achievement_history
+                .iter()
+                .map(|h| {
+                    if h.total_achievements > 0 {
+                        h.unlocked_achievements as f64 / h.total_achievements as f64 * 100.0
+                    } else {
+                        0.0
+                    }
+                })
+                .collect();
+            
+            let points: PlotPoints = self.achievement_history
+                .iter()
+                .enumerate()
+                .map(|(i, h)| {
+                    let pct = if h.total_achievements > 0 {
+                        h.unlocked_achievements as f64 / h.total_achievements as f64 * 100.0
+                    } else {
+                        0.0
+                    };
+                    [i as f64, pct]
+                })
+                .collect();
+            
+            let (y_min, y_max) = Self::calc_y_bounds(&values);
+            let line = Line::new("Overall Achievement %", points)
+                .color(egui::Color32::from_rgb(100, 150, 255));
+            
+            Plot::new("achievements_history_overall")
+                .view_aspect(2.0)
+                .include_y(y_min)
+                .include_y(y_max)
+                .show(ui, |plot_ui| {
+                    plot_ui.line(line);
+                });
+        }
         
         // Show current stats
         if let Some(latest) = self.achievement_history.last() {

@@ -87,9 +87,10 @@ pub fn fetch_owned_games_with_progress(progress_tx: Sender<FetchProgress>) -> Re
     let _ = progress_tx.send(FetchProgress::Saving);
     
     let total = games.len() as i32;
+    let unplayed = games.iter().filter(|g| g.playtime_forever == 0).count() as i32;
     let conn = crate::db::open_connection()?;
     crate::db::upsert_games(&conn, &config.steam_id, &games)?;
-    crate::db::insert_run_history(&conn, &config.steam_id, total)?;
+    crate::db::insert_run_history(&conn, &config.steam_id, total, unplayed)?;
     
     // Stage 5: Done - reload from DB to get consistent state
     let games = crate::db::get_all_games(&conn, &config.steam_id)?;
@@ -138,7 +139,8 @@ pub fn scrape_achievements_with_progress(progress_tx: Sender<ScrapeProgress>, fo
     let conn = crate::db::open_connection()?;
     crate::db::upsert_games(&conn, &config.steam_id, &games)?;
     let total_games = games.len() as i32;
-    crate::db::insert_run_history(&conn, &config.steam_id, total_games)?;
+    let unplayed_games = games.iter().filter(|g| g.playtime_forever == 0).count() as i32;
+    crate::db::insert_run_history(&conn, &config.steam_id, total_games, unplayed_games)?;
     
     // Step 2: Scrape achievements - either just unscraped games or all games if force is true
     let games_to_scrape = if force {
@@ -305,7 +307,8 @@ pub fn run_update_with_progress(progress_tx: Sender<UpdateProgress>) -> Result<(
     let conn = crate::db::open_connection()?;
     crate::db::upsert_games(&conn, &config.steam_id, &games)?;
     let total_games = games.len() as i32;
-    crate::db::insert_run_history(&conn, &config.steam_id, total_games)?;
+    let unplayed_games = games.iter().filter(|g| g.playtime_forever == 0).count() as i32;
+    crate::db::insert_run_history(&conn, &config.steam_id, total_games, unplayed_games)?;
     
     // Step 2: Fetch recently played games
     let _ = progress_tx.send(UpdateProgress::FetchingRecentlyPlayed);

@@ -36,6 +36,22 @@ pub trait StatsPanelPlatform {
     fn achievement_icon_source(&self, ui: &Ui, icon_url: &str) -> egui::ImageSource<'static>;
     
     // ========================================================================
+    // Graph tab state (for switching between different graph views)
+    // ========================================================================
+    
+    /// Get the current games graph tab (0 = Total Games, 1 = Unplayed Games)
+    fn games_graph_tab(&self) -> usize { 0 }
+    
+    /// Set the games graph tab
+    fn set_games_graph_tab(&mut self, _tab: usize) {}
+    
+    /// Get the current achievement graph tab (0 = Avg Game Completion %, 1 = Overall Achievement %)
+    fn achievements_graph_tab(&self) -> usize { 0 }
+    
+    /// Set the achievement graph tab
+    fn set_achievements_graph_tab(&mut self, _tab: usize) {}
+    
+    // ========================================================================
     // Achievement rating and selection (optional - default implementations)
     // ========================================================================
     
@@ -130,34 +146,79 @@ pub fn render_stats_content<P: StatsPanelPlatform>(
     render_breakdown(ui, platform);
 }
 
+/// Calculate Y-axis bounds with padding for unbounded values (e.g. game counts)
+fn calc_y_bounds_unbounded(values: &[f64]) -> (f64, f64) {
+    if values.is_empty() {
+        return (0.0, 100.0);
+    }
+    let min_y = values.iter().cloned().fold(f64::INFINITY, f64::min).max(0.0);
+    let max_y = values.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+    
+    // Add some padding (10% of range, minimum 1.0 for game counts)
+    let range = max_y - min_y;
+    let padding = (range * 0.1).max(1.0);
+    ((min_y - padding).max(0.0), max_y + padding)
+}
+
 /// Render the "Games Over Time" graph
 pub fn render_games_over_time<P: StatsPanelPlatform>(
     ui: &mut Ui,
-    platform: &P,
+    platform: &mut P,
     config: &StatsPanelConfig,
 ) {
     ui.heading("Games Over Time");
     ui.separator();
     
+    // Get current tab before any borrows
+    let current_tab = platform.games_graph_tab();
+    
+    // Tab buttons for switching between graph views
+    let mut new_tab = current_tab;
+    ui.horizontal(|ui| {
+        if ui.selectable_label(current_tab == 0, "Total Games").clicked() {
+            new_tab = 0;
+        }
+        if ui.selectable_label(current_tab == 1, "Unplayed Games").clicked() {
+            new_tab = 1;
+        }
+    });
+    
+    // Apply tab change if needed
+    if new_tab != current_tab {
+        platform.set_games_graph_tab(new_tab);
+    }
+    
     let run_history = platform.run_history();
     
-    // Always create PlotPoints - use default if empty (required for WASM rendering)
-    let points: PlotPoints = if run_history.is_empty() {
-        PlotPoints::default()
+    ui.add_space(4.0);
+    
+    // Build data for the selected tab
+    let (points, y_min, y_max, line_name, line_color) = if run_history.is_empty() {
+        // Empty plot - still need to show it for WASM layout
+        (PlotPoints::default(), 0.0, 100.0, "Total Games", Color32::from_rgb(100, 180, 255))
+    } else if new_tab == 0 {
+        // Total Games graph
+        let values: Vec<f64> = run_history.iter().map(|h| h.total_games as f64).collect();
+        let pts: PlotPoints = run_history.iter().enumerate()
+            .map(|(i, h)| [i as f64, h.total_games as f64]).collect();
+        let (y_min, y_max) = calc_y_bounds_unbounded(&values);
+        (pts, y_min, y_max, "Total Games", Color32::from_rgb(100, 180, 255))
     } else {
-        run_history
-            .iter()
-            .enumerate()
-            .map(|(i, h)| [i as f64, h.total_games as f64])
-            .collect()
+        // Unplayed Games graph
+        let values: Vec<f64> = run_history.iter().map(|h| h.unplayed_games as f64).collect();
+        let pts: PlotPoints = run_history.iter().enumerate()
+            .map(|(i, h)| [i as f64, h.unplayed_games as f64]).collect();
+        let (y_min, y_max) = calc_y_bounds_unbounded(&values);
+        (pts, y_min, y_max, "Unplayed Games", Color32::from_rgb(255, 150, 100))
     };
     
-    let line = Line::new("Total Games", points)
-        .color(Color32::from_rgb(100, 180, 255));
+    let line = Line::new(line_name, points).color(line_color);
     
-    // Build plot - use height/width for WASM, view_aspect for desktop
+    // Use consistent plot ID - changing IDs can cause WASM layout issues
     let mut plot = Plot::new("games_history")
-        .auto_bounds(egui::Vec2b::new(true, true));
+        .auto_bounds(egui::Vec2b::new(true, true))
+        .include_y(y_min)
+        .include_y(y_max);
     
     if let Some(height) = config.plot_height {
         plot = plot.height(height).width(ui.available_width());
@@ -182,7 +243,24 @@ pub fn render_games_over_time<P: StatsPanelPlatform>(
     
     if run_history.is_empty() {
         ui.label("No history yet. Sync to start tracking!");
+    } else {
+        // Debug: show data point count
+        ui.small(format!("{} data points", run_history.len()));
     }
+}
+
+/// Calculate Y-axis bounds with padding for percentage values (0-100 clamped)
+fn calc_y_bounds(values: &[f64]) -> (f64, f64) {
+    if values.is_empty() {
+        return (0.0, 100.0);
+    }
+    let min_y = values.iter().cloned().fold(f64::INFINITY, f64::min).max(0.0);
+    let max_y = values.iter().cloned().fold(f64::NEG_INFINITY, f64::max).min(100.0);
+    
+    // Use the full range as padding for tight zoom on flat lines
+    let range = max_y - min_y;
+    let padding = range.max(0.01);
+    ((min_y - padding).max(0.0), (max_y + padding).min(100.0))
 }
 
 /// Render the "Achievement Progress" graph with stats below
@@ -194,66 +272,61 @@ pub fn render_achievement_progress<P: StatsPanelPlatform>(
     ui.heading("Achievement Progress");
     ui.separator();
     
+    // Get current tab before any borrows
+    let current_tab = platform.achievements_graph_tab();
+    
+    // Tab buttons for switching between graph views
+    let mut new_tab = current_tab;
+    ui.horizontal(|ui| {
+        if ui.selectable_label(current_tab == 0, "Avg Game Completion %").clicked() {
+            new_tab = 0;
+        }
+        if ui.selectable_label(current_tab == 1, "Overall Achievement %").clicked() {
+            new_tab = 1;
+        }
+    });
+    
+    // Apply tab change if needed
+    if new_tab != current_tab {
+        platform.set_achievements_graph_tab(new_tab);
+    }
+    
     let achievement_history = platform.achievement_history();
     
-    // Always create PlotPoints and bounds - use defaults if empty (required for WASM rendering)
-    let (avg_completion_points, overall_pct_points, y_min, y_max) = if achievement_history.is_empty() {
-        (PlotPoints::default(), PlotPoints::default(), 0.0, 100.0)
+    ui.add_space(4.0);
+    
+    // Build data for the selected tab
+    let (points, y_min, y_max, line_name, line_color) = if achievement_history.is_empty() {
+        // Empty plot - still need to show it for WASM layout
+        (PlotPoints::default(), 0.0, 100.0, "Avg Game Completion %", Color32::from_rgb(100, 200, 100))
+    } else if new_tab == 0 {
+        // Avg Game Completion % graph
+        let values: Vec<f64> = achievement_history.iter().map(|h| h.avg_completion_percent as f64).collect();
+        let pts: PlotPoints = achievement_history.iter().enumerate()
+            .map(|(i, h)| [i as f64, h.avg_completion_percent as f64]).collect();
+        let (y_min, y_max) = calc_y_bounds(&values);
+        (pts, y_min, y_max, "Avg Game Completion %", Color32::from_rgb(100, 200, 100))
     } else {
-        // Line 1: Average game completion %
-        let avg_points: PlotPoints = achievement_history
-            .iter()
-            .enumerate()
-            .map(|(i, h)| [i as f64, h.avg_completion_percent as f64])
-            .collect();
-        
-        // Line 2: Overall achievement % (unlocked / total)
-        let overall_points: PlotPoints = achievement_history
-            .iter()
-            .enumerate()
-            .map(|(i, h)| {
-                let pct = if h.total_achievements > 0 {
-                    h.unlocked_achievements as f64 / h.total_achievements as f64 * 100.0
-                } else {
-                    0.0
-                };
-                [i as f64, pct]
-            })
-            .collect();
-        
-        // Calculate Y-axis bounds based on actual data
-        let all_values: Vec<f64> = achievement_history
-            .iter()
-            .flat_map(|h| {
-                let overall_pct = if h.total_achievements > 0 {
-                    h.unlocked_achievements as f64 / h.total_achievements as f64 * 100.0
-                } else {
-                    0.0
-                };
-                vec![h.avg_completion_percent as f64, overall_pct]
-            })
-            .collect();
-        
-        let min_y = all_values.iter().cloned().fold(f64::INFINITY, f64::min).max(0.0);
-        let max_y = all_values.iter().cloned().fold(f64::NEG_INFINITY, f64::max).min(100.0);
-        
-        // Add some padding (5% of range, minimum 1.0)
-        let range = max_y - min_y;
-        let padding = (range * 0.05).max(1.0);
-        let y_min = (min_y - padding).max(0.0);
-        let y_max = (max_y + padding).min(100.0);
-        
-        (avg_points, overall_points, y_min, y_max)
+        // Overall Achievement % graph
+        let values: Vec<f64> = achievement_history.iter().map(|h| {
+            if h.total_achievements > 0 {
+                h.unlocked_achievements as f64 / h.total_achievements as f64 * 100.0
+            } else { 0.0 }
+        }).collect();
+        let pts: PlotPoints = achievement_history.iter().enumerate().map(|(i, h)| {
+            let pct = if h.total_achievements > 0 {
+                h.unlocked_achievements as f64 / h.total_achievements as f64 * 100.0
+            } else { 0.0 };
+            [i as f64, pct]
+        }).collect();
+        let (y_min, y_max) = calc_y_bounds(&values);
+        (pts, y_min, y_max, "Overall Achievement %", Color32::from_rgb(100, 150, 255))
     };
     
-    let avg_line = Line::new("Avg Game Completion %", avg_completion_points)
-        .color(Color32::from_rgb(100, 200, 100));
-    let overall_line = Line::new("Overall Achievement %", overall_pct_points)
-        .color(Color32::from_rgb(100, 150, 255));
+    let line = Line::new(line_name, points).color(line_color);
     
-    // Build plot - use height/width for WASM, view_aspect for desktop
+    // Use consistent plot ID - changing IDs can cause WASM layout issues
     let mut plot = Plot::new("achievements_history")
-        .legend(egui_plot::Legend::default())
         .auto_bounds(egui::Vec2b::new(true, true))
         .include_y(y_min)
         .include_y(y_max);
@@ -276,100 +349,12 @@ pub fn render_achievement_progress<P: StatsPanelPlatform>(
     }
     
     plot.show(ui, |plot_ui| {
-        plot_ui.line(avg_line);
-        plot_ui.line(overall_line);
+        plot_ui.line(line);
     });
     
     if achievement_history.is_empty() {
         ui.label("No achievement data yet. Run a full scan to start tracking!");
-    } else {
-        // Show current stats below the graph
-        render_current_stats(ui, platform);
     }
-}
-
-/// Render the current stats (total achievements, avg completion, etc.)
-fn render_current_stats<P: StatsPanelPlatform>(ui: &mut Ui, platform: &mut P) {
-    let achievement_history = platform.achievement_history();
-    let Some(latest) = achievement_history.last() else {
-        return;
-    };
-    
-    ui.add_space(8.0);
-    
-    let yellow = Color32::from_rgb(255, 215, 0);
-    
-    let overall_pct = if latest.total_achievements > 0 {
-        latest.unlocked_achievements as f32 / latest.total_achievements as f32 * 100.0
-    } else {
-        0.0
-    };
-    
-    ui.horizontal(|ui| {
-        ui.label("Total achievements:");
-        ui.label(RichText::new(format!("{}", latest.unlocked_achievements)).color(yellow).strong());
-        ui.label("/");
-        ui.label(RichText::new(format!("{}", latest.total_achievements)).color(yellow).strong());
-        ui.label("(");
-        ui.label(RichText::new(format!("{:.1}%", overall_pct)).color(yellow).strong());
-        ui.label(")");
-    });
-    
-    // Calculate current avg completion based on toggle
-    let games = platform.games();
-    let games_with_ach: Vec<_> = games.iter()
-        .filter(|g| g.achievements_total.map(|t| t > 0).unwrap_or(false))
-        .collect();
-    
-    // Count played vs unplayed games (with achievements)
-    let played_count = games_with_ach.iter()
-        .filter(|g| g.playtime_forever > 0)
-        .count();
-    let unplayed_count = games_with_ach.len() - played_count;
-    let total_games_with_ach = games_with_ach.len();
-    
-    let include_unplayed = platform.include_unplayed_in_avg();
-    let completion_percents: Vec<f32> = if include_unplayed {
-        games_with_ach.iter()
-            .filter_map(|g| g.completion_percent())
-            .collect()
-    } else {
-        games_with_ach.iter()
-            .filter(|g| g.playtime_forever > 0)
-            .filter_map(|g| g.completion_percent())
-            .collect()
-    };
-    
-    let current_avg = if completion_percents.is_empty() {
-        0.0
-    } else {
-        completion_percents.iter().sum::<f32>() / completion_percents.len() as f32
-    };
-    
-    // Calculate unplayed percentage before the closure
-    let unplayed_pct = if total_games_with_ach > 0 {
-        unplayed_count as f32 / total_games_with_ach as f32 * 100.0
-    } else {
-        0.0
-    };
-    
-    ui.horizontal(|ui| {
-        ui.label("Avg. game completion:");
-        ui.label(RichText::new(format!("{:.1}%", current_avg)).color(yellow).strong());
-        let mut include = include_unplayed;
-        if ui.checkbox(&mut include, "Include unplayed").changed() {
-            platform.set_include_unplayed_in_avg(include);
-        }
-    });
-    
-    // Show unplayed games count and percentage
-    ui.horizontal(|ui| {
-        ui.label("Unplayed games:");
-        ui.label(RichText::new(format!("{}", unplayed_count)).color(yellow).strong());
-        ui.label("(");
-        ui.label(RichText::new(format!("{:.1}%", unplayed_pct)).color(yellow).strong());
-        ui.label(")");
-    });
 }
 
 /// Render the breakdown section with game counts and current stats

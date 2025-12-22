@@ -128,6 +128,7 @@ pub struct RunHistory {
     pub id: i64,
     pub run_at: DateTime<Utc>,
     pub total_games: i32,
+    pub unplayed_games: i32,
 }
 
 /// History of achievement progress over time

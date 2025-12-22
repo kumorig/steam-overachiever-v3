@@ -59,6 +59,9 @@ fn init_tables(conn: &Connection) -> Result<()> {
 
     // Migration: add steam_id to run_history if missing
     migrate_add_steam_id(conn, "run_history")?;
+    
+    // Migration: add unplayed_games column if missing
+    migrate_add_unplayed_games(conn)?;
 
     conn.execute(
         "CREATE TABLE IF NOT EXISTS achievement_history (
@@ -271,6 +274,27 @@ fn migrate_add_steam_id(conn: &Connection, table_name: &str) -> Result<()> {
     Ok(())
 }
 
+/// Add unplayed_games column to run_history if it doesn't exist
+fn migrate_add_unplayed_games(conn: &Connection) -> Result<()> {
+    let has_column: bool = conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('run_history') WHERE name = 'unplayed_games'",
+            [],
+            |row| row.get::<_, i32>(0),
+        )
+        .map(|count| count > 0)
+        .unwrap_or(true);
+
+    if !has_column {
+        let _ = conn.execute(
+            "ALTER TABLE run_history ADD COLUMN unplayed_games INTEGER NOT NULL DEFAULT 0",
+            [],
+        );
+    }
+
+    Ok(())
+}
+
 /// Update migrated data with the actual steam_id
 pub fn finalize_migration(conn: &Connection, steam_id: &str) -> Result<()> {
     conn.execute(
@@ -434,18 +458,18 @@ pub fn get_games_needing_achievement_scrape(conn: &Connection, steam_id: &str) -
     Ok(games)
 }
 
-pub fn insert_run_history(conn: &Connection, steam_id: &str, total_games: i32) -> Result<()> {
+pub fn insert_run_history(conn: &Connection, steam_id: &str, total_games: i32, unplayed_games: i32) -> Result<()> {
     let now = Utc::now();
     conn.execute(
-        "INSERT INTO run_history (steam_id, run_at, total_games) VALUES (?1, ?2, ?3)",
-        (steam_id, now.to_rfc3339(), total_games),
+        "INSERT INTO run_history (steam_id, run_at, total_games, unplayed_games) VALUES (?1, ?2, ?3, ?4)",
+        (steam_id, now.to_rfc3339(), total_games, unplayed_games),
     )?;
     Ok(())
 }
 
 pub fn get_run_history(conn: &Connection, steam_id: &str) -> Result<Vec<RunHistory>> {
     let mut stmt = conn.prepare(
-        "SELECT id, run_at, total_games FROM run_history WHERE steam_id = ?1 ORDER BY run_at"
+        "SELECT id, run_at, total_games, COALESCE(unplayed_games, 0) FROM run_history WHERE steam_id = ?1 ORDER BY run_at"
     )?;
     
     let history = stmt.query_map([steam_id], |row| {
@@ -458,10 +482,30 @@ pub fn get_run_history(conn: &Connection, steam_id: &str) -> Result<Vec<RunHisto
             id: row.get(0)?,
             run_at,
             total_games: row.get(2)?,
+            unplayed_games: row.get(3)?,
         })
     })?.collect::<Result<Vec<_>>>()?;
     
     Ok(history)
+}
+
+/// Update the unplayed_games count for the most recent run_history entry
+pub fn update_latest_run_history_unplayed(conn: &Connection, steam_id: &str, unplayed_games: i32) -> Result<()> {
+    conn.execute(
+        "UPDATE run_history SET unplayed_games = ?1 WHERE steam_id = ?2 AND id = (SELECT MAX(id) FROM run_history WHERE steam_id = ?2)",
+        (unplayed_games, steam_id),
+    )?;
+    Ok(())
+}
+
+/// Backfill unplayed_games for all run_history entries
+/// Uses the current unplayed count as a baseline since we don't have historical data
+pub fn backfill_run_history_unplayed(conn: &Connection, steam_id: &str, current_unplayed: i32) -> Result<()> {
+    conn.execute(
+        "UPDATE run_history SET unplayed_games = ?1 WHERE steam_id = ?2",
+        (current_unplayed, steam_id),
+    )?;
+    Ok(())
 }
 
 pub fn insert_achievement_history(conn: &Connection, steam_id: &str, total: i32, unlocked: i32, games_with_ach: i32, avg_pct: f32) -> Result<()> {

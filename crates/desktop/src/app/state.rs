@@ -1,6 +1,6 @@
 //! App state management - sorting, progress handling, and background operations
 
-use crate::db::{get_run_history, get_achievement_history, get_log_entries, insert_achievement_history, open_connection, get_last_update};
+use crate::db::{get_run_history, get_achievement_history, get_log_entries, insert_achievement_history, open_connection, get_last_update, update_latest_run_history_unplayed, backfill_run_history_unplayed};
 use crate::steam_api::{FetchProgress, ScrapeProgress, UpdateProgress};
 use crate::ui::{AppState, SortColumn, SortOrder, ProgressReceiver, FLASH_DURATION};
 
@@ -315,6 +315,11 @@ impl SteamOverachieverApp {
             .filter_map(|g| g.achievements_unlocked)
             .sum();
         
+        // Count unplayed games WITH achievements (playtime == 0)
+        let unplayed_with_ach = games_with_ach.iter()
+            .filter(|g| g.playtime_forever == 0)
+            .count() as i32;
+        
         // Only count played games (playtime > 0) for avg completion
         let completion_percents: Vec<f32> = games_with_ach.iter()
             .filter(|g| g.playtime_forever > 0)
@@ -328,6 +333,12 @@ impl SteamOverachieverApp {
         };
         
         if let Ok(conn) = open_connection() {
+            // Update the unplayed count in the most recent run_history entry
+            let _ = update_latest_run_history_unplayed(&conn, &self.config.steam_id, unplayed_with_ach);
+            
+            // Backfill historical entries that have 0 unplayed (from before this feature)
+            let _ = backfill_run_history_unplayed(&conn, &self.config.steam_id, unplayed_with_ach);
+            
             let _ = insert_achievement_history(
                 &conn,
                 &self.config.steam_id,
@@ -336,6 +347,7 @@ impl SteamOverachieverApp {
                 games_with_ach.len() as i32,
                 avg_completion,
             );
+            self.run_history = get_run_history(&conn, &self.config.steam_id).unwrap_or_default();
             self.achievement_history = get_achievement_history(&conn, &self.config.steam_id).unwrap_or_default();
             self.log_entries = get_log_entries(&conn, &self.config.steam_id, 30).unwrap_or_default();
         }

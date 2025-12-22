@@ -78,6 +78,22 @@ impl StatsPanelPlatform for WasmApp {
         // Also submit to server
         self.submit_achievement_rating(appid, apiname, rating);
     }
+    
+    fn achievements_graph_tab(&self) -> usize {
+        self.achievements_graph_tab
+    }
+    
+    fn set_achievements_graph_tab(&mut self, tab: usize) {
+        self.achievements_graph_tab = tab;
+    }
+    
+    fn games_graph_tab(&self) -> usize {
+        self.games_graph_tab
+    }
+    
+    fn set_games_graph_tab(&mut self, tab: usize) {
+        self.games_graph_tab = tab;
+    }
 }
 
 // ============================================================================

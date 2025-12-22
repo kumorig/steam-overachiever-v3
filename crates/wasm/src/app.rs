@@ -78,6 +78,8 @@ pub struct WasmApp {
     pub(crate) include_unplayed_in_avg: bool,
     pub(crate) show_stats_panel: bool,
     pub(crate) sidebar_panel: SidebarPanel,
+    pub(crate) games_graph_tab: usize,
+    pub(crate) achievements_graph_tab: usize,
     
     // Token from URL or storage
     pub(crate) auth_token: Option<String>,
@@ -130,6 +132,8 @@ impl WasmApp {
             include_unplayed_in_avg: false,
             show_stats_panel,
             sidebar_panel: SidebarPanel::Stats,
+            games_graph_tab: 0,
+            achievements_graph_tab: 0,
             auth_token,
             gdpr_consent,
         };

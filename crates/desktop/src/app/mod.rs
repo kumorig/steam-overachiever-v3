@@ -49,6 +49,9 @@ pub struct SteamOverachieverApp {
     // Sidebar panel state
     pub(crate) show_stats_panel: bool,
     pub(crate) sidebar_panel: SidebarPanel,
+    // Graph tab selections (0 = first option, 1 = second option)
+    pub(crate) games_graph_tab: usize,
+    pub(crate) achievements_graph_tab: usize,
 }
 
 impl SteamOverachieverApp {
@@ -95,6 +98,8 @@ impl SteamOverachieverApp {
             show_gdpr_dialog: false,
             show_stats_panel: true,
             sidebar_panel: SidebarPanel::Stats,
+            games_graph_tab: 0,
+            achievements_graph_tab: 0,
         };
         
         // Apply consistent sorting after loading from database

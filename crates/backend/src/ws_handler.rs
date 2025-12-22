@@ -159,6 +159,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                         
                         tracing::info!("Fetched {} games from Steam for user {}", games.len(), steam_id);
                         let game_count = games.len() as i32;
+                        let unplayed_count = games.iter().filter(|g| g.playtime_forever == 0).count() as i32;
                         
                         match crate::db::upsert_games(&state.db_pool, steam_id, &games).await {
                             Ok(count) => tracing::info!("Saved {} games for user {}", count, steam_id),
@@ -171,7 +172,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                         }
                         
                         // Record run history
-                        let _ = crate::db::insert_run_history(&state.db_pool, steam_id, game_count).await;
+                        let _ = crate::db::insert_run_history(&state.db_pool, steam_id, game_count, unplayed_count).await;
                         
                         // Step 2: Fetch recently played games
                         let recent_appids = crate::steam_api::fetch_recently_played(api_key, steam_id_u64)
@@ -267,24 +268,30 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                                 tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
                             }
                             
+                            // Calculate unplayed games with achievements
+                            let user_games = crate::db::get_user_games(&state.db_pool, steam_id).await.unwrap_or_default();
+                            let unplayed_with_ach = user_games.iter()
+                                .filter(|g| g.achievements_total.map(|t| t > 0).unwrap_or(false))
+                                .filter(|g| g.playtime_forever == 0)
+                                .count() as i32;
+                            
+                            // Update unplayed count in run_history and backfill historical data
+                            let _ = crate::db::update_latest_run_history_unplayed(&state.db_pool, steam_id, unplayed_with_ach).await;
+                            let _ = crate::db::backfill_run_history_unplayed(&state.db_pool, steam_id, unplayed_with_ach).await;
+                            
                             // Record achievement history if we scanned any games with achievements
                             if games_with_ach > 0 {
                                 let avg_completion = completion_sum / games_with_ach as f32;
                                 let _ = crate::db::insert_achievement_history(&state.db_pool, steam_id, total_achievements, total_unlocked, games_with_ach, avg_completion).await;
                             }
                             
-                            // Get updated games and return
-                            match crate::db::get_user_games(&state.db_pool, steam_id).await {
-                                Ok(user_games) => {
-                                    let result = overachiever_core::SyncResult {
-                                        games_updated: total as i32,
-                                        achievements_updated: total_achievements,
-                                        new_games: 0,
-                                    };
-                                    ServerMessage::SyncComplete { result, games: user_games }
-                                }
-                                Err(e) => ServerMessage::Error { message: format!("Failed to fetch games: {:?}", e) }
-                            }
+                            // Return with updated games
+                            let result = overachiever_core::SyncResult {
+                                games_updated: total as i32,
+                                achievements_updated: total_achievements,
+                                new_games: 0,
+                            };
+                            ServerMessage::SyncComplete { result, games: user_games }
                         }
                     } else {
                         ServerMessage::Error { message: "Steam API key not configured on server".to_string() }
@@ -375,22 +382,28 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                             tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
                         }
                         
+                        // Calculate unplayed games with achievements
+                        let user_games = crate::db::get_user_games(&state.db_pool, steam_id).await.unwrap_or_default();
+                        let unplayed_with_ach = user_games.iter()
+                            .filter(|g| g.achievements_total.map(|t| t > 0).unwrap_or(false))
+                            .filter(|g| g.playtime_forever == 0)
+                            .count() as i32;
+                        
+                        // Update unplayed count in run_history and backfill historical data
+                        let _ = crate::db::update_latest_run_history_unplayed(&state.db_pool, steam_id, unplayed_with_ach).await;
+                        let _ = crate::db::backfill_run_history_unplayed(&state.db_pool, steam_id, unplayed_with_ach).await;
+                        
                         // Record achievement history
                         let avg_completion = if games_with_ach > 0 { completion_sum / games_with_ach as f32 } else { 0.0 };
                         let _ = crate::db::insert_achievement_history(&state.db_pool, steam_id, total_achievements, total_unlocked, games_with_ach, avg_completion).await;
                         
-                        // Get updated games and return
-                        match crate::db::get_user_games(&state.db_pool, steam_id).await {
-                            Ok(user_games) => {
-                                let result = overachiever_core::SyncResult {
-                                    games_updated: total as i32,
-                                    achievements_updated: total_achievements,
-                                    new_games: 0,
-                                };
-                                ServerMessage::SyncComplete { result, games: user_games }
-                            }
-                            Err(e) => ServerMessage::Error { message: format!("Failed to fetch games: {:?}", e) }
-                        }
+                        // Return with updated games
+                        let result = overachiever_core::SyncResult {
+                            games_updated: total as i32,
+                            achievements_updated: total_achievements,
+                            new_games: 0,
+                        };
+                        ServerMessage::SyncComplete { result, games: user_games }
                     } else {
                         ServerMessage::Error { message: "Steam API key not configured on server".to_string() }
                     }
