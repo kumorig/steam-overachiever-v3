@@ -8,7 +8,7 @@ use egui_extras::{Column, TableBuilder};
 use egui_phosphor::regular;
 
 use crate::Game;
-use super::StatsPanelPlatform;
+use super::{StatsPanelPlatform, instant_tooltip};
 
 // ============================================================================
 // Types
@@ -121,6 +121,21 @@ pub trait GamesTablePlatform: StatsPanelPlatform {
     fn get_flash_intensity(&self, _appid: u64) -> Option<f32> {
         None
     }
+    
+    /// Get the current navigation target (appid, apiname) for scroll-to behavior
+    /// Returns None if no navigation is pending
+    fn get_navigation_target(&self) -> Option<(u64, String)> {
+        None
+    }
+    
+    /// Clear the navigation target after scrolling to it
+    fn clear_navigation_target(&mut self) {}
+    
+    /// Check if we need to scroll to the navigation target (one-time scroll)
+    fn needs_scroll_to_target(&self) -> bool { false }
+    
+    /// Mark that we've scrolled to the target (call after scrolling)
+    fn mark_scrolled_to_target(&mut self) {}
 }
 
 // ============================================================================
@@ -292,7 +307,16 @@ pub fn render_games_table<P: GamesTablePlatform>(ui: &mut Ui, platform: &mut P, 
         .map(|&idx| platform.games()[idx].clone())
         .collect();
     
-    TableBuilder::new(ui)
+    // Find navigation target row index if any (only if we need to scroll)
+    let nav_row_index = if platform.needs_scroll_to_target() {
+        platform.get_navigation_target().and_then(|(nav_appid, _)| {
+            games.iter().position(|g| g.appid == nav_appid)
+        })
+    } else {
+        None
+    };
+    
+    let mut table_builder = TableBuilder::new(ui)
         .striped(true)
         .resizable(false) // Table-level resizing disabled
         .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
@@ -302,8 +326,16 @@ pub fn render_games_table<P: GamesTablePlatform>(ui: &mut Ui, platform: &mut P, 
         .column(Column::exact(100.0)) // Achievements - fixed
         .column(Column::exact(60.0))  // Percent - fixed
         .min_scrolled_height(0.0)
-        .max_scroll_height(available_height)
-        .header(20.0, |mut header| {
+        .max_scroll_height(available_height);
+    
+    // Scroll to navigation target row if present
+    // Note: Don't mark as scrolled here - let the achievement-level scroll do that
+    // This ensures clicking a different achievement in the same game still scrolls
+    if let Some(row_idx) = nav_row_index {
+        table_builder = table_builder.scroll_to_row(row_idx, Some(egui::Align::Center));
+    }
+    
+    table_builder.header(20.0, |mut header| {
             header.col(|ui| {
                 let indicator = sort_indicator(platform, SortColumn::Name);
                 let label = if indicator.is_empty() { "Name".to_string() } else { format!("Name {}", indicator) };
@@ -476,6 +508,13 @@ pub fn render_games_table<P: GamesTablePlatform>(ui: &mut Ui, platform: &mut P, 
 
 /// Render the achievements list for an expanded game row
 fn render_achievements_list<P: GamesTablePlatform>(ui: &mut Ui, platform: &mut P, appid: u64) {
+    // Check if we have a navigation target for this game
+    let nav_target = platform.get_navigation_target();
+    let target_apiname = nav_target
+        .as_ref()
+        .filter(|(nav_appid, _)| *nav_appid == appid)
+        .map(|(_, apiname)| apiname.clone());
+    
     if let Some(achievements) = platform.get_cached_achievements(appid) {
         ui.add_space(4.0);
         ui.separator();
@@ -505,17 +544,46 @@ fn render_achievements_list<P: GamesTablePlatform>(ui: &mut Ui, platform: &mut P
         
         egui::ScrollArea::vertical().max_height(300.0).show(ui, |ui| {
             ui.set_width(ui.available_width());
+            let is_authenticated = platform.is_authenticated();
             for (i, (apiname, name, achieved, icon_url, description, unlocktime)) in ach_data.iter().enumerate() {
-                let image_source = platform.achievement_icon_source(ui, icon_url);
-                let user_rating = platform.get_user_achievement_rating(appid, apiname);
+                // Check if this is the navigation target
+                let is_target = target_apiname.as_ref().map(|t| t == apiname).unwrap_or(false);
                 
-                // Alternate row background
+                let image_source = platform.achievement_icon_source(ui, icon_url);
+                // Get user's own rating (for display purposes)
+                let user_rating = if is_authenticated {
+                    platform.get_user_achievement_rating(appid, apiname)
+                } else {
+                    None
+                };
+                // Get community average rating
+                let avg_rating_data = platform.get_achievement_avg_rating(appid, apiname);
+                
+                // Alternate row background, or highlight if target
                 let row_rect = ui.available_rect_before_wrap();
                 let row_rect = egui::Rect::from_min_size(
                     row_rect.min,
                     egui::vec2(row_rect.width(), 52.0)
                 );
-                if i % 2 == 1 {
+                if is_target {
+                    // Highlight the target achievement with a golden border
+                    ui.painter().rect_filled(
+                        row_rect,
+                        4.0,
+                        Color32::from_rgba_unmultiplied(255, 215, 0, 40) // Gold highlight
+                    );
+                    ui.painter().rect_stroke(
+                        row_rect,
+                        4.0,
+                        egui::Stroke::new(2.0, Color32::from_rgb(255, 215, 0)),
+                        egui::epaint::StrokeKind::Inside,
+                    );
+                    // Scroll to this row only if we haven't scrolled yet
+                    if platform.needs_scroll_to_target() {
+                        ui.scroll_to_rect(row_rect, Some(egui::Align::Center));
+                        platform.mark_scrolled_to_target();
+                    }
+                } else if i % 2 == 1 {
                     ui.painter().rect_filled(
                         row_rect,
                         0.0,
@@ -523,12 +591,22 @@ fn render_achievements_list<P: GamesTablePlatform>(ui: &mut Ui, platform: &mut P
                     );
                 }
                 
+                // Add top padding for the row content
+                ui.add_space(2.0);
                 ui.horizontal(|ui| {
-                    ui.add(
+                    // Add left padding so icon doesn't overlap the gold border
+                    ui.add_space(4.0);
+                    
+                    let icon_response = ui.add(
                         egui::Image::new(image_source)
                             .fit_to_exact_size(egui::vec2(48.0, 48.0))
                             .corner_radius(4.0)
                     );
+                    
+                    // Show unlock date on hover (instant, no delay)
+                    if let Some(unlock_dt) = unlocktime {
+                        instant_tooltip(&icon_response, unlock_dt.format("%Y-%m-%d").to_string());
+                    }
                     
                     let name_text = if *achieved {
                         RichText::new(name).color(Color32::WHITE)
@@ -550,15 +628,13 @@ fn render_achievements_list<P: GamesTablePlatform>(ui: &mut Ui, platform: &mut P
                             ui.label(name_text);
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                                 // Show compact average rating (read-only)
-                                render_compact_avg_rating(ui, user_rating);
-                                
-                                if let Some(unlock_dt) = unlocktime {
-                                    ui.add_space(8.0);
-                                    ui.label(
-                                        RichText::new(unlock_dt.format("%Y-%m-%d").to_string())
-                                            .color(Color32::from_rgb(100, 200, 100))
-                                    );
-                                }
+                                // Use average if available, otherwise show user's own rating
+                                let (display_rating, count) = if let Some((avg, cnt)) = avg_rating_data {
+                                    (Some(avg.round() as u8), Some(cnt))
+                                } else {
+                                    (user_rating, None)
+                                };
+                                render_compact_avg_rating(ui, display_rating, count);
                             });
                         });
                         // Description below, full width
@@ -575,22 +651,59 @@ fn render_achievements_list<P: GamesTablePlatform>(ui: &mut Ui, platform: &mut P
     }
 }
 
+/// Get difficulty label for rating (with trailing space to avoid border clipping)
+fn difficulty_label(rating: u8) -> &'static str {
+    match rating {
+        1 => "Very easy  ",
+        2 => "Easy  ",
+        3 => "Moderate  ",
+        4 => "Hard  ",
+        5 => "Extreme  ",
+        _ => "",
+    }
+}
+
+/// Get icon for difficulty rating (single icon per level)
+fn difficulty_icon(rating: u8) -> &'static str {
+    match rating {
+        1 => "🐢",  // Turtle - Very easy
+        2 => "🐇",  // Rabbit - Easy
+        3 => "🏃",  // Runner - Moderate
+        4 => "⚡",  // Lightning - Hard
+        5 => "🔥",  // Fire - Extreme
+        _ => "",
+    }
+}
+
+/// Get color for difficulty label (green for easy, red for extreme)
+fn difficulty_color(rating: u8) -> Color32 {
+    match rating {
+        1 => Color32::from_rgb(80, 200, 80),   // Green - Very easy
+        2 => Color32::from_rgb(140, 200, 60),  // Yellow-green - Easy  
+        3 => Color32::from_rgb(200, 200, 60),  // Yellow - Moderate
+        4 => Color32::from_rgb(230, 140, 50),  // Orange - Hard
+        5 => Color32::from_rgb(230, 60, 60),   // Red - Extreme
+        _ => Color32::GRAY,
+    }
+}
+
 /// Render compact average rating display (read-only, no interaction)
-/// Shows filled/empty stars based on average rating, or nothing if no rating
-fn render_compact_avg_rating(ui: &mut Ui, avg_rating: Option<u8>) {
+/// Shows a single difficulty icon with label and vote count
+fn render_compact_avg_rating(ui: &mut Ui, avg_rating: Option<u8>, rating_count: Option<i32>) {
     let Some(rating) = avg_rating else {
         return; // Don't show anything if no rating
     };
     
-    let gold = Color32::from_rgb(255, 215, 0);
-    let gray = Color32::from_rgb(80, 80, 80);
-    
-    // Compact display: just show the stars inline (right to left)
-    for star in (1..=5).rev() {
-        let is_filled = star <= rating;
-        let star_char = if is_filled { "★" } else { "☆" };
-        let color = if is_filled { gold } else { gray };
-        
-        ui.label(RichText::new(star_char).color(color).size(10.0));
+    // Add count in parentheses first (since we're right-to-left)
+    if let Some(count) = rating_count {
+        ui.label(RichText::new(format!("({})", count)).color(Color32::GRAY).size(10.0));
+        ui.add_space(4.0);
     }
+    
+    // Add difficulty label with gradient color
+    ui.label(RichText::new(difficulty_label(rating)).color(difficulty_color(rating)).size(10.0));
+    ui.add_space(4.0);
+    
+    // Single difficulty icon
+    ui.label(RichText::new(difficulty_icon(rating)).color(difficulty_color(rating)).size(12.0));
 }

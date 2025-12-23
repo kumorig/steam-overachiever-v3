@@ -49,6 +49,12 @@ pub fn main() {
                     let mut fonts = egui::FontDefinitions::default();
                     egui_phosphor::add_to_fonts(&mut fonts, egui_phosphor::Variant::Regular);
                     cc.egui_ctx.set_fonts(fonts);
+                    
+                    // Set tooltip delay to 0
+                    let mut style = (*cc.egui_ctx.style()).clone();
+                    style.interaction.tooltip_delay = 0.0;
+                    cc.egui_ctx.set_style(style);
+                    
                     Ok(Box::new(app::WasmApp::new()))
                 }),
             )

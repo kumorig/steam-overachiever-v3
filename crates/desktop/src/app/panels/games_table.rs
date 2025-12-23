@@ -83,6 +83,23 @@ impl GamesTablePlatform for SteamOverachieverApp {
         // Use the existing flash mechanism from desktop app
         SteamOverachieverApp::get_flash_intensity(self, appid)
     }
+    
+    fn get_navigation_target(&self) -> Option<(u64, String)> {
+        self.navigation_target.clone()
+    }
+    
+    fn clear_navigation_target(&mut self) {
+        self.navigation_target = None;
+        self.needs_scroll_to_target = false;
+    }
+    
+    fn needs_scroll_to_target(&self) -> bool {
+        self.needs_scroll_to_target
+    }
+    
+    fn mark_scrolled_to_target(&mut self) {
+        self.needs_scroll_to_target = false;
+    }
 }
 
 impl SteamOverachieverApp {

@@ -4,6 +4,26 @@
 #   cargo install wasm-bindgen-cli
 
 $ErrorActionPreference = "Stop"
+$ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$ProjectRoot = Split-Path -Parent $ScriptDir
+$BuildInfoPath = Join-Path $ProjectRoot "build_info.json"
+
+# Load or initialize build number
+if (Test-Path $BuildInfoPath) {
+    $buildInfo = Get-Content $BuildInfoPath | ConvertFrom-Json
+    $buildNumber = $buildInfo.build_number + 1
+} else {
+    $buildNumber = 1
+}
+
+# Create build info with current timestamp (UTC)
+$buildDatetime = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+$buildInfo = @{
+    build_number = $buildNumber
+    build_datetime = $buildDatetime
+}
+
+Write-Host "Build #$buildNumber at $buildDatetime" -ForegroundColor Magenta
 
 Write-Host "Building WASM release..." -ForegroundColor Cyan
 
@@ -36,6 +56,11 @@ Copy-Item "web/index.html" "web/dist/index.html" -Force
 if (Test-Path "assets") {
     Copy-Item -Path "assets" -Destination "web/dist/assets" -Recurse -Force
 }
+
+# Save build info (both to project root for tracking, and to dist for serving)
+$buildInfoJson = $buildInfo | ConvertTo-Json
+$buildInfoJson | Out-File -FilePath $BuildInfoPath -Encoding utf8
+$buildInfoJson | Out-File -FilePath "web/dist/build_info.json" -Encoding utf8
 
 Write-Host ""
 Write-Host "Build complete! Files are in web/dist/" -ForegroundColor Green

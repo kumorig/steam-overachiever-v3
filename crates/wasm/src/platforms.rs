@@ -94,6 +94,39 @@ impl StatsPanelPlatform for WasmApp {
     fn set_games_graph_tab(&mut self, tab: usize) {
         self.games_graph_tab = tab;
     }
+    
+    fn is_authenticated(&self) -> bool {
+        self.auth_token.is_some()
+    }
+    
+    fn navigate_to_achievement(&mut self, appid: u64, apiname: String) {
+        // Clear filters so the game is visible
+        self.filter_name.clear();
+        self.filter_achievements = TriFilter::All;
+        self.filter_playtime = TriFilter::All;
+        
+        // Expand the game row
+        self.expanded_rows.insert(appid);
+        
+        // Request achievements if not cached
+        if !self.achievements_cache.contains_key(&appid) {
+            if let Some(client) = &self.ws_client {
+                client.fetch_achievements(appid);
+            }
+        }
+        
+        // Set navigation target for scroll-to behavior and enable one-time scroll
+        self.navigation_target = Some((appid, apiname));
+        self.needs_scroll_to_target = true;
+    }
+    
+    fn get_log_selected_achievement(&self) -> Option<(u64, String)> {
+        self.log_selected_achievement.clone()
+    }
+    
+    fn set_log_selected_achievement(&mut self, appid: u64, apiname: String) {
+        self.log_selected_achievement = Some((appid, apiname));
+    }
 }
 
 // ============================================================================
@@ -163,5 +196,22 @@ impl GamesTablePlatform for WasmApp {
         if let Some(client) = &self.ws_client {
             client.fetch_achievements(appid);
         }
+    }
+    
+    fn get_navigation_target(&self) -> Option<(u64, String)> {
+        self.navigation_target.clone()
+    }
+    
+    fn clear_navigation_target(&mut self) {
+        self.navigation_target = None;
+        self.needs_scroll_to_target = false;
+    }
+    
+    fn needs_scroll_to_target(&self) -> bool {
+        self.needs_scroll_to_target
+    }
+    
+    fn mark_scrolled_to_target(&mut self) {
+        self.needs_scroll_to_target = false;
     }
 }

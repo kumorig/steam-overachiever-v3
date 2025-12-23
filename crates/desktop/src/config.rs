@@ -1,6 +1,6 @@
 //! Configuration management using config.toml
 
-use overachiever_core::{DataMode, GdprConsent};
+use overachiever_core::GdprConsent;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
@@ -9,11 +9,7 @@ const CONFIG_PATH: &str = "config.toml";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
-    /// Data mode: local, hybrid, or remote
-    #[serde(default)]
-    pub data_mode: DataMode,
-    
-    /// Steam Web API key (required for local/hybrid modes)
+    /// Steam Web API key
     #[serde(default)]
     pub steam_web_api_key: String,
     
@@ -37,7 +33,6 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            data_mode: DataMode::Local,
             steam_web_api_key: String::new(),
             steam_id: String::new(),
             server_url: String::new(),
@@ -79,16 +74,9 @@ impl Config {
         Ok(())
     }
     
-    /// Check if config is valid for current mode
+    /// Check if config is valid (steam credentials required)
     pub fn is_valid(&self) -> bool {
-        match self.data_mode {
-            DataMode::Local | DataMode::Hybrid => {
-                !self.steam_web_api_key.is_empty() && !self.steam_id.is_empty()
-            }
-            DataMode::Remote => {
-                !self.server_url.is_empty()
-            }
-        }
+        !self.steam_web_api_key.is_empty() && !self.steam_id.is_empty()
     }
     
     /// Check if local Steam API config is valid

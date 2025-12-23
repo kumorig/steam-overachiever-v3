@@ -15,6 +15,7 @@ use crate::storage::{
     get_token_from_url, get_token_from_storage, save_token_to_storage, clear_token_from_storage,
     get_ws_url_from_location, get_gdpr_consent_from_storage,
 };
+use crate::http_client::BuildInfo;
 
 // ============================================================================
 // Types
@@ -86,6 +87,18 @@ pub struct WasmApp {
     
     // GDPR consent status
     pub(crate) gdpr_consent: GdprConsent,
+    
+    // Build info (fetched from build_info.json)
+    pub(crate) build_info: Rc<RefCell<Option<BuildInfo>>>,
+    
+    // Navigation target for scrolling to an achievement
+    pub(crate) navigation_target: Option<(u64, String)>, // (appid, apiname)
+    
+    // Whether we need to scroll to the navigation target (one-time scroll)
+    pub(crate) needs_scroll_to_target: bool,
+    
+    // Last clicked achievement in log panel (for persistent highlight)
+    pub(crate) log_selected_achievement: Option<(u64, String)>, // (appid, apiname)
 }
 
 impl WasmApp {
@@ -136,11 +149,33 @@ impl WasmApp {
             achievements_graph_tab: 0,
             auth_token,
             gdpr_consent,
+            build_info: Rc::new(RefCell::new(None)),
+            navigation_target: None,
+            needs_scroll_to_target: false,
+            log_selected_achievement: None,
         };
+        
+        // Fetch build info asynchronously
+        app.fetch_build_info();
         
         // Auto-connect on startup
         app.connect();
         app
+    }
+    
+    /// Fetch build info from server
+    fn fetch_build_info(&self) {
+        let build_info = self.build_info.clone();
+        wasm_bindgen_futures::spawn_local(async move {
+            match crate::http_client::fetch_build_info().await {
+                Ok(info) => {
+                    *build_info.borrow_mut() = Some(info);
+                }
+                Err(e) => {
+                    web_sys::console::log_1(&format!("Failed to fetch build info: {}", e).into());
+                }
+            }
+        });
     }
     
     // ========================================================================

@@ -3,44 +3,11 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-/// Data mode for the application
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "lowercase")]
-pub enum DataMode {
-    /// All data stored locally in SQLite (desktop only)
-    #[default]
-    Local,
-    /// Personal data local, community ratings/tips synced to server
-    Hybrid,
-    /// All data synced to remote server (works in WASM)
-    Remote,
-}
-
-impl DataMode {
-    pub fn requires_api_key(&self) -> bool {
-        matches!(self, DataMode::Local | DataMode::Hybrid)
-    }
-
-    pub fn requires_server(&self) -> bool {
-        matches!(self, DataMode::Hybrid | DataMode::Remote)
-    }
-
-    pub fn label(&self) -> &'static str {
-        match self {
-            DataMode::Local => "Local Only",
-            DataMode::Hybrid => "Hybrid (Local + Community)",
-            DataMode::Remote => "Cloud (Full Remote)",
-        }
-    }
-
-    pub fn description(&self) -> &'static str {
-        match self {
-            DataMode::Local => "Essentially air-gapped: No remote communication or storage except Steam API. Requires Steam API key.",
-            DataMode::Hybrid => "Personal data local, Accesses community ratings/tips. Shares steam_id if you post comments/ratings. Requires Steam API key.",
-            DataMode::Remote => "All data synced to server. Login with Steam, no API key needed. Your game list is stored remotely, assossiated with your steam_id.",
-        }
-    }
-}
+/// Description of how the desktop app handles data
+pub const DATA_HANDLING_DESCRIPTION: &str = "\
+• Your game data is stored locally on your computer\n\
+• Uses Steam API to fetch your games and achievements\n\
+• Uses overachiever.space to post/fetch community difficulty ratings and comments";
 
 /// Raw game data from Steam API
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -268,6 +235,39 @@ pub struct SyncResult {
     pub new_games: i32,
 }
 
+// ============================================================================
+// Cloud Sync Types
+// ============================================================================
+
+/// Cloud sync status for a user
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CloudSyncStatus {
+    pub has_data: bool,
+    pub game_count: i32,
+    pub achievement_count: i32,
+    pub last_sync: Option<DateTime<Utc>>,
+}
+
+/// Lightweight achievement data for cloud sync (no icons/descriptions)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SyncAchievement {
+    pub appid: u64,
+    pub apiname: String,
+    pub achieved: bool,
+    pub unlocktime: Option<DateTime<Utc>>,
+}
+
+/// Full cloud sync data bundle for upload/download
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CloudSyncData {
+    pub steam_id: String,
+    pub games: Vec<Game>,
+    pub achievements: Vec<SyncAchievement>,
+    pub run_history: Vec<RunHistory>,
+    pub achievement_history: Vec<AchievementHistory>,
+    pub exported_at: DateTime<Utc>,
+}
+
 /// GDPR consent status
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
@@ -291,48 +291,4 @@ impl GdprConsent {
     pub fn is_accepted(&self) -> bool {
         matches!(self, GdprConsent::Accepted)
     }
-}
-
-// ============================================================================
-// Cloud Sync Types
-// ============================================================================
-
-/// Lightweight achievement data for cloud sync (no icon URLs - saves bandwidth)
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SyncAchievement {
-    pub appid: u64,
-    pub apiname: String,
-    pub achieved: bool,
-    pub unlocktime: Option<DateTime<Utc>>,
-}
-
-impl From<&GameAchievement> for SyncAchievement {
-    fn from(a: &GameAchievement) -> Self {
-        Self {
-            appid: a.appid,
-            apiname: a.apiname.clone(),
-            achieved: a.achieved,
-            unlocktime: a.unlocktime,
-        }
-    }
-}
-
-/// Full user data for cloud sync (upload/download)
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CloudSyncData {
-    pub steam_id: String,
-    pub games: Vec<Game>,
-    pub achievements: Vec<SyncAchievement>,
-    pub run_history: Vec<RunHistory>,
-    pub achievement_history: Vec<AchievementHistory>,
-    pub exported_at: DateTime<Utc>,
-}
-
-/// Cloud sync status response
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CloudSyncStatus {
-    pub has_data: bool,
-    pub game_count: i32,
-    pub achievement_count: i32,
-    pub last_sync: Option<DateTime<Utc>>,
 }

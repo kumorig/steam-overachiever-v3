@@ -22,7 +22,15 @@ impl WasmApp {
         
         egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
             ui.horizontal(|ui| {
-                ui.heading("Overachiever");
+                // Heading with build info tooltip
+                let heading = ui.heading("Overachiever");
+                if let Some(build_info) = self.build_info.borrow().as_ref() {
+                    heading.on_hover_text(format!(
+                        "Build #{}\n{}",
+                        build_info.build_number,
+                        build_info.build_datetime
+                    ));
+                }
                 ui.separator();
                 
                 match &self.connection_state {

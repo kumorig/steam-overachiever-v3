@@ -4,7 +4,7 @@ mod state;
 mod panels;
 
 use crate::config::Config;
-use crate::db::{get_all_games, get_run_history, get_achievement_history, get_log_entries, open_connection, get_last_update, finalize_migration, ensure_user};
+use crate::db::{get_all_games, get_run_history, get_achievement_history, get_log_entries, open_connection, get_last_update, finalize_migration, ensure_user, get_all_achievement_ratings};
 use crate::icon_cache::IconCache;
 use crate::ui::{AppState, SortColumn, SortOrder, TriFilter, ProgressReceiver};
 use crate::cloud_sync::{CloudSyncState, AuthResult, CloudOpResult};
@@ -40,6 +40,8 @@ pub struct SteamOverachieverApp {
     pub(crate) achievements_cache: HashMap<u64, Vec<GameAchievement>>,
     // Icon cache for achievement icons
     pub(crate) icon_cache: IconCache,
+    // User achievement ratings: (appid, apiname) -> rating
+    pub(crate) user_achievement_ratings: HashMap<(u64, String), u8>,
     // Filters
     pub(crate) filter_name: String,
     pub(crate) filter_achievements: TriFilter,
@@ -63,6 +65,12 @@ pub struct SteamOverachieverApp {
     pub(crate) cloud_op_receiver: Option<Receiver<Result<CloudOpResult, String>>>,
     // Pending cloud action (for confirmation dialog)
     pub(crate) pending_cloud_action: Option<CloudAction>,
+    // Navigation target for scrolling to an achievement
+    pub(crate) navigation_target: Option<(u64, String)>, // (appid, apiname)
+    // Whether we need to scroll to the navigation target (one-time scroll)
+    pub(crate) needs_scroll_to_target: bool,
+    // Last clicked achievement in the log panel (for persistent highlight)
+    pub(crate) log_selected_achievement: Option<(u64, String)>, // (appid, apiname)
 }
 
 /// Cloud action pending confirmation
@@ -93,6 +101,37 @@ impl SteamOverachieverApp {
         let last_update_time = get_last_update(&conn).unwrap_or(None);
         let is_cloud_linked = config.cloud_token.is_some();
         
+        // Load user achievement ratings - prefer server data if authenticated, fallback to local
+        let user_achievement_ratings: HashMap<(u64, String), u8> = if let Some(token) = &config.cloud_token {
+            // Try to fetch from server
+            match crate::cloud_sync::fetch_user_achievement_ratings(token) {
+                Ok(server_ratings) => {
+                    // Update local cache with server data
+                    for (appid, apiname, rating) in &server_ratings {
+                        let _ = crate::db::set_achievement_rating(&conn, steam_id, *appid, apiname, *rating);
+                    }
+                    server_ratings.into_iter()
+                        .map(|(appid, apiname, rating)| ((appid, apiname), rating))
+                        .collect()
+                }
+                Err(_) => {
+                    // Fallback to local cache
+                    get_all_achievement_ratings(&conn, steam_id)
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(|(appid, apiname, rating)| ((appid, apiname), rating))
+                        .collect()
+                }
+            }
+        } else {
+            // Not authenticated, use local cache only
+            get_all_achievement_ratings(&conn, steam_id)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|(appid, apiname, rating)| ((appid, apiname), rating))
+                .collect()
+        };
+        
         let mut app = Self {
             config,
             games,
@@ -111,6 +150,7 @@ impl SteamOverachieverApp {
             expanded_rows: HashSet::new(),
             achievements_cache: HashMap::new(),
             icon_cache: IconCache::new(),
+            user_achievement_ratings,
             filter_name: String::new(),
             filter_achievements: TriFilter::All,
             filter_playtime: TriFilter::All,
@@ -125,6 +165,9 @@ impl SteamOverachieverApp {
             auth_receiver: None,
             cloud_op_receiver: None,
             pending_cloud_action: None,
+            navigation_target: None,
+            needs_scroll_to_target: false,
+            log_selected_achievement: None,
         };
         
         // Apply consistent sorting after loading from database

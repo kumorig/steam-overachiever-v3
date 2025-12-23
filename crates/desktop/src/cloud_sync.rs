@@ -323,3 +323,77 @@ pub fn start_status_check(token: String) -> mpsc::Receiver<Result<CloudOpResult,
     
     rx
 }
+
+// ============================================================================
+// Achievement Rating API
+// ============================================================================
+
+/// Submit an achievement rating to the server (fire-and-forget)
+pub fn submit_achievement_rating(token: &str, appid: u64, apiname: &str, rating: u8) {
+    let url = format!("{}/api/achievement/rating", DEFAULT_SERVER_URL);
+    let token = token.to_string();
+    let apiname = apiname.to_string();
+    
+    // Fire-and-forget in background thread
+    thread::spawn(move || {
+        let client = reqwest::blocking::Client::new();
+        let body = serde_json::json!({
+            "appid": appid,
+            "apiname": apiname,
+            "rating": rating
+        });
+        
+        match client
+            .post(&url)
+            .header("Authorization", format!("Bearer {}", token))
+            .header("Content-Type", "application/json")
+            .json(&body)
+            .send()
+        {
+            Ok(resp) if resp.status().is_success() => {
+                // Success - rating submitted
+            }
+            Ok(resp) => {
+                eprintln!("Failed to submit rating: HTTP {}", resp.status());
+            }
+            Err(e) => {
+                eprintln!("Failed to submit rating: {}", e);
+            }
+        }
+    });
+}
+
+/// Fetch all achievement ratings for the user from the server
+pub fn fetch_user_achievement_ratings(token: &str) -> Result<Vec<(u64, String, u8)>, String> {
+    let url = format!("{}/api/achievement/ratings", DEFAULT_SERVER_URL);
+    
+    let client = reqwest::blocking::Client::new();
+    let response = client
+        .get(&url)
+        .header("Authorization", format!("Bearer {}", token))
+        .send()
+        .map_err(|e| format!("Network error: {}", e))?;
+    
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().unwrap_or_default();
+        return Err(format!("Server error {}: {}", status, body));
+    }
+    
+    #[derive(serde::Deserialize)]
+    struct RatingItem {
+        appid: u64,
+        apiname: String,
+        rating: u8,
+    }
+    
+    #[derive(serde::Deserialize)]
+    struct RatingsResponse {
+        ratings: Vec<RatingItem>,
+    }
+    
+    let result: RatingsResponse = response.json()
+        .map_err(|e| format!("Failed to parse response: {}", e))?;
+    
+    Ok(result.ratings.into_iter().map(|r| (r.appid, r.apiname, r.rating)).collect())
+}

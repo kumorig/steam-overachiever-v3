@@ -3,12 +3,11 @@
 //! Renders: Activity log (achievements and first plays)
 //! Features: Star ratings, achievement selection, batch commenting
 
-use egui::{self, Color32, RichText, Ui, Response, RectAlign, Sense};
-use egui::containers::Popup;
+use egui::{self, Color32, RichText, Ui, Sense, Response};
 use egui_phosphor::regular;
 
 use crate::LogEntry;
-use super::StatsPanelPlatform;
+use super::{StatsPanelPlatform, instant_tooltip};
 
 // ============================================================================
 // Constants
@@ -16,44 +15,55 @@ use super::StatsPanelPlatform;
 
 const STAR_SIZE: f32 = 14.0;
 const STAR_SPACING: f32 = 2.0;
-const STAR_COLOR_EMPTY: Color32 = Color32::from_rgb(80, 80, 80);
-// Note: STAR_COLOR_HOVER is computed at runtime due to alpha
-const SELECTION_COLOR: Color32 = Color32::from_rgb(100, 150, 255);
+const FLAME_COLOR_EMPTY: Color32 = Color32::from_rgb(50, 50, 50); // More subtle empty circles
 
-/// Get hover color for stars (with transparency)
-fn star_color_hover() -> Color32 {
-    Color32::from_rgba_unmultiplied(255, 215, 0, 180)
+/// Get hover color for flames (with transparency)
+fn flame_color_hover() -> Color32 {
+    Color32::from_rgba_unmultiplied(255, 140, 0, 180) // Orange for fire
+}
+
+/// Get difficulty label for rating
+fn difficulty_label(rating: u8) -> &'static str {
+    match rating {
+        1 => "Very easy",
+        2 => "Easy",
+        3 => "Moderate",
+        4 => "Hard",
+        5 => "Extreme",
+        _ => "",
+    }
+}
+
+/// Get color for difficulty label (green for easy, red for extreme)
+fn difficulty_color(rating: u8) -> Color32 {
+    match rating {
+        1 => Color32::from_rgb(80, 200, 80),   // Green - Very easy
+        2 => Color32::from_rgb(140, 200, 60),  // Yellow-green - Easy  
+        3 => Color32::from_rgb(200, 200, 60),  // Yellow - Moderate
+        4 => Color32::from_rgb(230, 140, 50),  // Orange - Hard
+        5 => Color32::from_rgb(230, 60, 60),   // Red - Extreme
+        _ => Color32::GRAY,
+    }
 }
 
 // ============================================================================
 // Helper Functions
 // ============================================================================
 
-/// Show a tooltip immediately (no delay) positioned to the left
-fn instant_tooltip(response: &Response, text: impl Into<String>) {
-    if response.hovered() {
-        let text = text.into();
-        Popup::from_response(response)
-            .align(RectAlign::LEFT_START)
-            .gap(4.0)
-            .show(|ui| { ui.label(&text); });
-    }
-}
-
-/// Render a 5-star rating widget with current rating displayed.
+/// Render a 5-flame difficulty rating widget with current rating displayed.
 /// Returns Some(rating) if clicked.
 fn star_rating_widget(ui: &mut Ui, current_rating: Option<u8>) -> Option<u8> {
-    let gold = Color32::from_rgb(255, 215, 0);
+    let flame_color = Color32::from_rgb(255, 100, 0); // Orange-red for flames
     let mut clicked_rating: Option<u8> = None;
     
-    // Calculate hover state for all stars
+    // Calculate hover state for all flames
     let start_pos = ui.cursor().min;
     let total_width = 5.0 * STAR_SIZE + 4.0 * STAR_SPACING;
     let rating_rect = egui::Rect::from_min_size(start_pos, egui::vec2(total_width, STAR_SIZE));
     
     // Sense for the whole rating area
     let response = ui.allocate_rect(rating_rect, Sense::click());
-    let hover_star = if response.hovered() {
+    let hover_flame = if response.hovered() {
         if let Some(pos) = response.hover_pos() {
             let rel_x = pos.x - start_pos.x;
             Some(((rel_x / (STAR_SIZE + STAR_SPACING)).floor() as u8).min(4) + 1)
@@ -64,42 +74,58 @@ fn star_rating_widget(ui: &mut Ui, current_rating: Option<u8>) -> Option<u8> {
         None
     };
     
-    // Draw stars
+    // Draw flames
     let painter = ui.painter();
     for i in 0..5u8 {
-        let star_num = i + 1;
+        let flame_num = i + 1;
         let x = start_pos.x + i as f32 * (STAR_SIZE + STAR_SPACING);
         let center = egui::pos2(x + STAR_SIZE / 2.0, start_pos.y + STAR_SIZE / 2.0);
         
-        // Determine star color: hover > current rating > empty
-        let is_filled = current_rating.map(|r| star_num <= r).unwrap_or(false);
-        let color = if let Some(hover) = hover_star {
-            if star_num <= hover {
-                star_color_hover()
+        // Determine flame color: hover > current rating > empty
+        let is_filled = current_rating.map(|r| flame_num <= r).unwrap_or(false);
+        let (icon, color) = if let Some(hover) = hover_flame {
+            if flame_num <= hover {
+                (regular::FIRE, flame_color_hover())
             } else if is_filled {
-                gold
+                (regular::FIRE, flame_color)
             } else {
-                STAR_COLOR_EMPTY
+                (regular::CIRCLE, FLAME_COLOR_EMPTY)
             }
         } else if is_filled {
-            gold
+            (regular::FIRE, flame_color)
         } else {
-            STAR_COLOR_EMPTY
+            (regular::CIRCLE, FLAME_COLOR_EMPTY)
         };
         
-        // Draw star using phosphor icon
+        // Draw flame or dot using phosphor icon
         painter.text(
             center,
             egui::Align2::CENTER_CENTER,
-            regular::STAR,
+            icon,
             egui::FontId::proportional(STAR_SIZE),
             color,
         );
     }
     
+    // Show difficulty label after the flames
+    let label_x = start_pos.x + total_width + 6.0;
+    let label_center = egui::pos2(label_x, start_pos.y + STAR_SIZE / 2.0);
+    let display_rating = hover_flame.or(current_rating);
+    if let Some(rating) = display_rating {
+        let label = difficulty_label(rating);
+        let label_color = difficulty_color(rating);
+        painter.text(
+            label_center,
+            egui::Align2::LEFT_CENTER,
+            label,
+            egui::FontId::proportional(11.0),
+            label_color,
+        );
+    }
+    
     // Handle click
     if response.clicked() {
-        if let Some(rating) = hover_star {
+        if let Some(rating) = hover_flame {
             clicked_rating = Some(rating);
         }
     }
@@ -152,8 +178,6 @@ pub fn render_log<P: StatsPanelPlatform>(ui: &mut Ui, platform: &mut P) {
         
         match entry {
             LogEntry::Achievement { appid, apiname, game_name, achievement_name, timestamp, achievement_icon, game_icon_url } => {
-                let is_selected = platform.is_achievement_selected(*appid, apiname);
-                
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 4.0;
                     
@@ -170,9 +194,6 @@ pub fn render_log<P: StatsPanelPlatform>(ui: &mut Ui, platform: &mut P) {
                         }
                     }
                     
-                    // Selectable achievement area (icon + name)
-                    let selectable_start = ui.cursor().min;
-                    
                     // Achievement icon - tooltip shows date
                     let mut icon_response: Option<Response> = None;
                     if !achievement_icon.is_empty() {
@@ -187,39 +208,48 @@ pub fn render_log<P: StatsPanelPlatform>(ui: &mut Ui, platform: &mut P) {
                         icon_response = Some(response);
                     }
                     
-                    // Achievement name (clickable)
+                    // Achievement name (clickable - navigates to game)
+                    let is_selected = platform.get_log_selected_achievement()
+                        .map(|(sel_appid, sel_apiname)| sel_appid == *appid && sel_apiname == *apiname)
+                        .unwrap_or(false);
+                    
+                    let name_text = RichText::new(achievement_name).color(achievement_color).strong();
                     let name_response = ui.add(
-                        egui::Label::new(RichText::new(achievement_name).color(achievement_color).strong())
+                        egui::Label::new(name_text)
+                            .selectable(false)
                             .sense(Sense::click())
                     );
                     
-                    let selectable_end = ui.cursor().min;
-                    
-                    // Draw selection rectangle if selected
-                    if is_selected {
-                        let select_rect = egui::Rect::from_min_max(
-                            egui::pos2(selectable_start.x - 2.0, selectable_start.y - 2.0),
-                            egui::pos2(selectable_end.x + 2.0, selectable_start.y + 20.0)
-                        );
-                        ui.painter().rect_stroke(
-                            select_rect,
-                            3.0,
-                            egui::Stroke::new(2.0, SELECTION_COLOR),
-                            egui::epaint::StrokeKind::Outside,
+                    // Underline on hover or when selected
+                    if name_response.hovered() || is_selected {
+                        let rect = name_response.rect;
+                        let underline_y = rect.bottom() - 1.0;
+                        ui.painter().line_segment(
+                            [egui::pos2(rect.left(), underline_y), egui::pos2(rect.right(), underline_y)],
+                            egui::Stroke::new(1.0, achievement_color),
                         );
                     }
                     
-                    // Handle selection clicks
+                    // Pointer cursor on hover
+                    if name_response.hovered() {
+                        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                    }
+                    
+                    // Handle click to navigate to game
                     let clicked = icon_response.map(|r| r.clicked()).unwrap_or(false) || name_response.clicked();
                     if clicked {
-                        platform.toggle_achievement_selection(*appid, apiname.clone(), achievement_name.clone());
+                        // Set as selected in log and navigate to the game
+                        platform.set_log_selected_achievement(*appid, apiname.clone());
+                        platform.navigate_to_achievement(*appid, apiname.clone());
                     }
                     
-                    // Star rating (inline after achievement name)
-                    ui.add_space(8.0);
-                    let current_rating = platform.get_user_achievement_rating(*appid, apiname);
-                    if let Some(rating) = star_rating_widget(ui, current_rating) {
-                        platform.set_user_achievement_rating(*appid, apiname.clone(), rating);
+                    // Star rating (inline after achievement name) - only show if authenticated
+                    if platform.is_authenticated() {
+                        ui.add_space(8.0);
+                        let current_rating = platform.get_user_achievement_rating(*appid, apiname);
+                        if let Some(rating) = star_rating_widget(ui, current_rating) {
+                            platform.set_user_achievement_rating(*appid, apiname.clone(), rating);
+                        }
                     }
                 });
             }

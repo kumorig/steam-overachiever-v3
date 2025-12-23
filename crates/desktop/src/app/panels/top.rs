@@ -2,7 +2,7 @@
 
 use eframe::egui;
 use egui_phosphor::regular;
-use overachiever_core::{DataMode, GdprConsent};
+use overachiever_core::{GdprConsent, DATA_HANDLING_DESCRIPTION};
 
 use crate::app::SteamOverachieverApp;
 use crate::cloud_sync::CloudSyncState;
@@ -68,8 +68,8 @@ impl SteamOverachieverApp {
                         self.show_settings = true;
                     }
                     
-                    // GDPR button - only show for hybrid/remote mode and if consent has been set
-                    if self.config.data_mode.requires_server() && self.config.gdpr_consent.is_set() {
+                    // GDPR button - show if consent has been set
+                    if self.config.gdpr_consent.is_set() {
                         if ui.button(regular::SHIELD_CHECK).on_hover_text("Privacy Settings").clicked() {
                             self.show_gdpr_dialog = true;
                         }
@@ -99,131 +99,79 @@ impl SteamOverachieverApp {
                     
                     ui.add_space(12.0);
                     
-                    // Data Mode selection
-                    ui.horizontal(|ui| {
-                        ui.label("Data Mode:");
-                        egui::ComboBox::from_id_salt("data_mode")
-                            .selected_text(self.config.data_mode.label())
-                            .show_ui(ui, |ui| {
-                                if ui.selectable_value(&mut self.config.data_mode, DataMode::Local, DataMode::Local.label()).changed() {
-                                    let _ = self.config.save();
-                                }
-                                if ui.selectable_value(&mut self.config.data_mode, DataMode::Hybrid, DataMode::Hybrid.label()).changed() {
-                                    let _ = self.config.save();
-                                }
-                                if ui.selectable_value(&mut self.config.data_mode, DataMode::Remote, DataMode::Remote.label()).changed() {
-                                    let _ = self.config.save();
-                                }
-                            });
-                    });
-                    
+                    // Data handling description
+                    ui.heading("How Data is Handled");
+                    ui.add_space(4.0);
                     ui.label(
-                        egui::RichText::new(self.config.data_mode.description())
+                        egui::RichText::new(DATA_HANDLING_DESCRIPTION)
                             .color(egui::Color32::GRAY)
-                            .small()
                     );
                     
                     ui.add_space(12.0);
                     ui.separator();
                     ui.add_space(8.0);
                     
-                    // Steam credentials (for Local/Hybrid modes)
-                    let needs_steam_creds = self.config.data_mode.requires_api_key();
+                    // Steam credentials
+                    ui.heading("Steam Credentials");
                     
-                    ui.add_enabled_ui(needs_steam_creds, |ui| {
-                        ui.heading("Steam Credentials");
-                        if !needs_steam_creds {
-                            ui.label(egui::RichText::new("Not required for Cloud mode").color(egui::Color32::GRAY));
+                    ui.add_space(8.0);
+                    
+                    ui.horizontal(|ui| {
+                        ui.label("Steam ID:");
+                        ui.add_space(20.0);
+                        if ui.add(
+                            egui::TextEdit::singleline(&mut self.config.steam_id)
+                                .desired_width(180.0)
+                                .hint_text("12345678901234567")
+                        ).changed() {
+                            let _ = self.config.save();
                         }
-                        
-                        ui.add_space(8.0);
-                        
-                        ui.horizontal(|ui| {
-                            ui.label("Steam ID:");
-                            ui.add_space(20.0);
-                            if ui.add(
-                                egui::TextEdit::singleline(&mut self.config.steam_id)
-                                    .desired_width(180.0)
-                                    .hint_text("12345678901234567")
-                            ).changed() {
-                                let _ = self.config.save();
-                            }
-                        });
-                        
-                        ui.add_space(8.0);
-                        
-                        ui.horizontal(|ui| {
-                            ui.label("API Key:");
-                            ui.add_space(28.0);
-                            if ui.add(
-                                egui::TextEdit::singleline(&mut self.config.steam_web_api_key)
-                                    .desired_width(180.0)
-                                    .password(true)
-                                    .hint_text("Your Steam API key")
-                            ).changed() {
-                                let _ = self.config.save();
-                            }
-                        });
-                        
-                        ui.add_space(8.0);
-                        
-                        ui.horizontal(|ui| {
-                            ui.hyperlink_to(
-                                format!("{} Get API Key", regular::LINK),
-                                "https://steamcommunity.com/dev/apikey"
-                            );
-                            ui.label(
-                                egui::RichText::new("(No affiliation)")
-                                    .color(egui::Color32::GRAY)
-                            );
-                        });
-                        
-                        ui.horizontal(|ui| {
-                            ui.hyperlink_to(
-                                format!("{} Figure out Steam ID", regular::LINK),
-                                "https://steamid.io"
-                            );
-                            ui.label(
-                                egui::RichText::new("(No affiliation)")
-                                    .color(egui::Color32::GRAY)
-                            );
-                        });
                     });
                     
-                    // Server settings (for Hybrid/Remote modes)
-                    if self.config.data_mode.requires_server() {
-                        ui.add_space(12.0);
-                        ui.separator();
-                        ui.add_space(8.0);
-                        
-                        ui.heading("Server Settings");
-                        
-                        ui.add_space(8.0);
-                        
-                        ui.horizontal(|ui| {
-                            ui.label("Server URL:");
-                            if ui.add(
-                                egui::TextEdit::singleline(&mut self.config.server_url)
-                                    .desired_width(250.0)
-                                    .hint_text("wss://overachiever.example.com")
-                            ).changed() {
-                                let _ = self.config.save();
-                            }
-                        });
-                        
-                        ui.add_space(4.0);
-                        ui.label(egui::RichText::new("Server connection not yet implemented").color(egui::Color32::YELLOW));
-                    }
+                    ui.add_space(8.0);
+                    
+                    ui.horizontal(|ui| {
+                        ui.label("API Key:");
+                        ui.add_space(28.0);
+                        if ui.add(
+                            egui::TextEdit::singleline(&mut self.config.steam_web_api_key)
+                                .desired_width(180.0)
+                                .password(true)
+                                .hint_text("Your Steam API key")
+                        ).changed() {
+                            let _ = self.config.save();
+                        }
+                    });
+                    
+                    ui.add_space(8.0);
+                    
+                    ui.horizontal(|ui| {
+                        ui.hyperlink_to(
+                            format!("{} Get API Key", regular::LINK),
+                            "https://steamcommunity.com/dev/apikey"
+                        );
+                        ui.label(
+                            egui::RichText::new("(No affiliation)")
+                                .color(egui::Color32::GRAY)
+                        );
+                    });
+                    
+                    ui.horizontal(|ui| {
+                        ui.hyperlink_to(
+                            format!("{} Figure out Steam ID", regular::LINK),
+                            "https://steamid.io"
+                        );
+                        ui.label(
+                            egui::RichText::new("(No affiliation)")
+                                .color(egui::Color32::GRAY)
+                        );
+                    });
                     
                     ui.add_space(12.0);
                     
                     // Validation status
                     if !self.config.is_valid() {
-                        let msg = match self.config.data_mode {
-                            DataMode::Local | DataMode::Hybrid => "Steam ID and API Key are required",
-                            DataMode::Remote => "Server URL is required",
-                        };
-                        ui.colored_label(egui::Color32::YELLOW, format!("{} {}", regular::WARNING, msg));
+                        ui.colored_label(egui::Color32::YELLOW, format!("{} Steam ID and API Key are required", regular::WARNING));
                     } else {
                         ui.colored_label(egui::Color32::GREEN, format!("{} Configuration valid", regular::CHECK));
                     }
@@ -409,13 +357,8 @@ impl SteamOverachieverApp {
         }
     }
     
-    /// Render GDPR modal for hybrid/remote modes
+    /// Render GDPR modal
     pub(crate) fn render_gdpr_modal(&mut self, ctx: &egui::Context) {
-        // Only show for hybrid/remote mode
-        if !self.config.data_mode.requires_server() {
-            return;
-        }
-        
         // If consent is already set and dialog not explicitly opened, don't show
         if self.config.gdpr_consent.is_set() && !self.show_gdpr_dialog {
             return;
@@ -461,7 +404,7 @@ impl SteamOverachieverApp {
                             ui.label("• Your Steam display name");
                             ui.label("• Your game library (via Steam API)");
                             ui.label("• Achievement data for your games");
-                            ui.label("• Community ratings/tips you submit (Hybrid mode)");
+                            ui.label("• Community ratings/tips you submit");
                         });
                     
                     ui.add_space(12.0);
@@ -469,12 +412,7 @@ impl SteamOverachieverApp {
                     // Purpose section
                     ui.heading("Purpose");
                     ui.add_space(4.0);
-                    let purpose_text = match self.config.data_mode {
-                        DataMode::Hybrid => "In Hybrid mode, your personal game data stays local. Only community ratings and tips you submit are synced to the server.",
-                        DataMode::Remote => "In Cloud mode, all data is stored on the server associated with your Steam ID.",
-                        DataMode::Local => "In Local mode, no data is sent to any server.",
-                    };
-                    ui.label(purpose_text);
+                    ui.label("Your personal game data stays local on your computer. Only community ratings and tips you choose to submit are synced to overachiever.space.");
                     
                     ui.add_space(12.0);
                     

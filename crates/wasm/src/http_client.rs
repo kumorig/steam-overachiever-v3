@@ -152,3 +152,36 @@ struct AchievementRatingEntry {
     apiname: String,
     rating: u8,
 }
+
+// ============================================================================
+// Build Info
+// ============================================================================
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct BuildInfo {
+    pub build_number: u32,
+    pub build_datetime: String,
+}
+
+/// Fetch build info from build_info.json
+pub async fn fetch_build_info() -> Result<BuildInfo, String> {
+    let origin = web_sys::window()
+        .and_then(|w| w.location().origin().ok())
+        .unwrap_or_default();
+    
+    let url = format!("{}/build_info.json", origin);
+    
+    let response = Request::get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to fetch build info: {}", e))?;
+    
+    if !response.ok() {
+        return Err(format!("Build info not found (status {})", response.status()));
+    }
+    
+    response
+        .json::<BuildInfo>()
+        .await
+        .map_err(|e| format!("Failed to parse build info: {}", e))
+}

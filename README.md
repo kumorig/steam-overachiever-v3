@@ -58,6 +58,7 @@ Feel free to open an issue with suggestions.
 - [ ] Optimization: Pack icon files into single binary blob/texture atlas to reduce file count. Option to not cache icons to disk for desktop.
 - [ ] Feature: export of achievement data.
 - [ ] (important for the future!!): If we ever get a few more users, and more than one user scans at the same time, we will hit rate limits. We should implement some kind of queue. And run a backend service to handle requests. -- Currently if you leave the app, requests will stop, but the backend could keep going. its also a security problem to let the client trigger requests indescriminately. 
+- [ ] Explain how data is stored and sent, and what steam openid is used for. (its kinda broken still)
 
 ## License
 This project is licensed under the MIT License. See the `LICENSE` file for details.

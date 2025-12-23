@@ -55,6 +55,9 @@ pub trait StatsPanelPlatform {
     // Achievement rating and selection (optional - default implementations)
     // ========================================================================
     
+    /// Check if user is authenticated (has cloud token) - needed for ratings/comments
+    fn is_authenticated(&self) -> bool { false }
+    
     /// Check if an achievement is selected (for multi-select commenting)
     fn is_achievement_selected(&self, _appid: u64, _apiname: &str) -> bool { false }
     
@@ -86,6 +89,30 @@ pub trait StatsPanelPlatform {
     
     /// Set the pending comment text
     fn set_pending_comment(&mut self, _comment: String) {}
+    
+    // ========================================================================
+    // Navigation (for clicking on achievements in log to scroll to game)
+    // ========================================================================
+    
+    /// Navigate to a specific achievement in the games table
+    /// This should: scroll to the game, expand it, and scroll to the achievement
+    fn navigate_to_achievement(&mut self, _appid: u64, _apiname: String) {}
+    
+    /// Get the last clicked achievement in the log (for persistent highlight)
+    fn get_log_selected_achievement(&self) -> Option<(u64, String)> { None }
+    
+    /// Set the last clicked achievement in the log
+    fn set_log_selected_achievement(&mut self, _appid: u64, _apiname: String) {}
+    
+    // ========================================================================
+    // Community ratings (average ratings from all users)
+    // ========================================================================
+    
+    /// Get the community average rating for an achievement (avg, count)
+    /// Returns None if no community ratings exist
+    fn get_achievement_avg_rating(&self, _appid: u64, _apiname: &str) -> Option<(f32, i32)> {
+        None
+    }
 }
 
 /// Configuration for how the stats panel should render
